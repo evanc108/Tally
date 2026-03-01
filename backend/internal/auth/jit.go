@@ -98,6 +98,19 @@ func NewJITHandler(db *sql.DB, rdb *redis.Client, cfg *config.Config, pl plaid.B
 }
 
 // Authorize is the core JIT authorization logic.
+//
+// @Summary      JIT card authorization
+// @Description  Generic card-processor JIT authorization endpoint. Runs the 5-tier funding waterfall and returns APPROVE or DECLINE. Requires X-Tally-Signature and Idempotency-Key headers.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        X-Tally-Signature header string     true "HMAC-SHA256 signature: sha256=<hex>"
+// @Param        Idempotency-Key   header string     true "Unique key to deduplicate retries"
+// @Param        body              body   JITRequest true "Authorization request"
+// @Success      200 {object} JITResponse
+// @Failure      400 {object} map[string]string
+// @Failure      422 {object} JITResponse
+// @Router       /v1/auth/jit [post]
 func (h *JITHandler) Authorize(c *gin.Context) {
 	var req JITRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

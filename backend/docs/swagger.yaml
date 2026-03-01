@@ -1,0 +1,543 @@
+basePath: /
+definitions:
+  auth.JITRequest:
+    properties:
+      amount_cents:
+        type: integer
+      card_token:
+        type: string
+      currency:
+        type: string
+      idempotency_key:
+        description: |-
+          IdempotencyKey must also be sent in the Idempotency-Key header so the
+          middleware can deduplicate without parsing the body.
+        type: string
+      merchant_category:
+        type: string
+      merchant_name:
+        type: string
+    required:
+    - amount_cents
+    - card_token
+    - currency
+    - idempotency_key
+    type: object
+  auth.JITResponse:
+    properties:
+      approved_amount_cents:
+        description: < requested when partial
+        type: integer
+      decision:
+        description: '"APPROVE" | "DECLINE"'
+        type: string
+      reason:
+        description: populated on DECLINE
+        type: string
+      transaction_id:
+        description: populated on APPROVE
+        type: string
+    type: object
+  cards.hnAmount:
+    properties:
+      currencyCode:
+        type: string
+      value:
+        type: integer
+    type: object
+  cards.hnAuthRequest:
+    properties:
+      authorizationRequestId:
+        type: string
+      cardId:
+        type: string
+      id:
+        type: string
+      merchantDetails:
+        $ref: '#/definitions/cards.hnMerchant'
+      transactionAmount:
+        $ref: '#/definitions/cards.hnAmount'
+      type:
+        type: string
+    type: object
+  cards.hnAuthResponse:
+    properties:
+      approvedTransactionAmount:
+        $ref: '#/definitions/cards.hnAmount'
+      authorizationResponseCode:
+        type: string
+    type: object
+  cards.hnMerchant:
+    properties:
+      categoryCode:
+        type: string
+      name:
+        type: string
+    type: object
+  cards.issueCardRequest:
+    properties:
+      email:
+        type: string
+      first_name:
+        type: string
+      last_name:
+        type: string
+      member_id:
+        type: string
+    required:
+    - email
+    - first_name
+    - last_name
+    - member_id
+    type: object
+  cards.issueCardResponse:
+    properties:
+      card_id:
+        type: string
+      card_token:
+        type: string
+      cardholder_id:
+        type: string
+    type: object
+  cards.loadWalletRequest:
+    properties:
+      amount_cents:
+        type: integer
+      member_id:
+        type: string
+    required:
+    - amount_cents
+    - member_id
+    type: object
+  cards.loadWalletResponse:
+    properties:
+      new_balance_cents:
+        type: integer
+    type: object
+  groups.addMemberRequest:
+    properties:
+      display_name:
+        type: string
+      is_leader:
+        type: boolean
+      plaid_access_token:
+        type: string
+      plaid_account_id:
+        type: string
+      split_weight:
+        type: number
+    required:
+    - display_name
+    type: object
+  groups.addMemberResponse:
+    properties:
+      display_name:
+        type: string
+      member_id:
+        type: string
+      split_weight:
+        type: number
+      user_id:
+        type: string
+    type: object
+  groups.createGroupRequest:
+    properties:
+      currency:
+        type: string
+      name:
+        type: string
+    required:
+    - name
+    type: object
+  groups.createGroupResponse:
+    properties:
+      created_at:
+        type: string
+      currency:
+        type: string
+      group_id:
+        type: string
+      name:
+        type: string
+    type: object
+  groups.getGroupResponse:
+    properties:
+      currency:
+        type: string
+      group_id:
+        type: string
+      members:
+        items:
+          $ref: '#/definitions/groups.memberSummary'
+        type: array
+      name:
+        type: string
+    type: object
+  groups.memberSummary:
+    properties:
+      display_name:
+        type: string
+      has_card:
+        type: boolean
+      is_leader:
+        type: boolean
+      member_id:
+        type: string
+      split_weight:
+        type: number
+      tally_balance_cents:
+        type: integer
+    type: object
+  groups.transactionSummary:
+    properties:
+      amount_cents:
+        type: integer
+      created_at:
+        type: string
+      currency:
+        type: string
+      id:
+        type: string
+      merchant_category:
+        type: string
+      merchant_name:
+        type: string
+      status:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: Backend for Tally — a group card-spending app with JIT authorization
+    and a double-entry ledger.
+  title: Tally API
+  version: "1.0"
+paths:
+  /v1/auth/jit:
+    post:
+      consumes:
+      - application/json
+      description: Generic card-processor JIT authorization endpoint. Runs the 5-tier
+        funding waterfall and returns APPROVE or DECLINE. Requires X-Tally-Signature
+        and Idempotency-Key headers.
+      parameters:
+      - description: 'HMAC-SHA256 signature: sha256=<hex>'
+        in: header
+        name: X-Tally-Signature
+        required: true
+        type: string
+      - description: Unique key to deduplicate retries
+        in: header
+        name: Idempotency-Key
+        required: true
+        type: string
+      - description: Authorization request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/auth.JITRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.JITResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/auth.JITResponse'
+      summary: JIT card authorization
+      tags:
+      - auth
+  /v1/cards/issue:
+    post:
+      consumes:
+      - application/json
+      description: Creates a Highnote cardholder and virtual card for a member. The
+        returned card_token is used to identify the card in JIT authorization webhooks.
+      parameters:
+      - description: Member identity
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/cards.issueCardRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/cards.issueCardResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "502":
+          description: Bad Gateway
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Issue a virtual card
+      tags:
+      - cards
+  /v1/groups:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new Tally group and provisions its double-entry liability
+        ledger account.
+      parameters:
+      - description: Group details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/groups.createGroupRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/groups.createGroupResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create a group
+      tags:
+      - groups
+  /v1/groups/{id}:
+    get:
+      description: Returns group metadata (name, currency) and a summary of all members
+        including balances.
+      parameters:
+      - description: Group ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/groups.getGroupResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a group
+      tags:
+      - groups
+  /v1/groups/{id}/members:
+    post:
+      consumes:
+      - application/json
+      description: Creates a member record (with optional Plaid tokens) and provisions
+        their asset ledger account.
+      parameters:
+      - description: Group ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Member details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/groups.addMemberRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/groups.addMemberResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Add a member to a group
+      tags:
+      - groups
+  /v1/groups/{id}/transactions:
+    get:
+      description: Returns the 50 most recent transactions for a group, newest first.
+      parameters:
+      - description: Group ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              items:
+                $ref: '#/definitions/groups.transactionSummary'
+              type: array
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List transactions
+      tags:
+      - groups
+  /v1/wallets/load:
+    post:
+      consumes:
+      - application/json
+      description: Credits a member's Tally wallet balance (Tier 1 funding source).
+        Also syncs the load to Highnote on a best-effort basis.
+      parameters:
+      - description: Load details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/cards.loadWalletRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cards.loadWalletResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Load a member's wallet
+      tags:
+      - cards
+  /v1/webhooks/highnote/authorization:
+    post:
+      consumes:
+      - application/json
+      description: Receives Highnote card authorization events and runs the 5-tier
+        funding waterfall (Tally balance → primary bank → secondary bank → leader
+        overwrite → partial auth). Requires X-Tally-Signature and Idempotency-Key
+        headers.
+      parameters:
+      - description: 'HMAC-SHA256 signature: sha256=<hex>'
+        in: header
+        name: X-Tally-Signature
+        required: true
+        type: string
+      - description: Unique key to deduplicate retries
+        in: header
+        name: Idempotency-Key
+        required: true
+        type: string
+      - description: Highnote authorization event
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/cards.hnAuthRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cards.hnAuthResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Highnote JIT authorization webhook
+      tags:
+      - webhooks
+swagger: "2.0"

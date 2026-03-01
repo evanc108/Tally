@@ -57,6 +57,19 @@ type issueCardResponse struct {
 
 // IssueCard creates a Highnote cardholder and virtual card for a member,
 // then stores the identifiers in the members table.
+//
+// @Summary      Issue a virtual card
+// @Description  Creates a Highnote cardholder and virtual card for a member. The returned card_token is used to identify the card in JIT authorization webhooks.
+// @Tags         cards
+// @Accept       json
+// @Produce      json
+// @Param        body body issueCardRequest true "Member identity"
+// @Success      201  {object} issueCardResponse
+// @Failure      400  {object} map[string]string
+// @Failure      404  {object} map[string]string
+// @Failure      502  {object} map[string]string
+// @Failure      500  {object} map[string]string
+// @Router       /v1/cards/issue [post]
 func (h *Handler) IssueCard(c *gin.Context) {
 	var req issueCardRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -134,6 +147,18 @@ type loadWalletResponse struct {
 }
 
 // LoadWallet credits a member's Tally wallet and syncs the balance in Highnote.
+//
+// @Summary      Load a member's wallet
+// @Description  Credits a member's Tally wallet balance (Tier 1 funding source). Also syncs the load to Highnote on a best-effort basis.
+// @Tags         cards
+// @Accept       json
+// @Produce      json
+// @Param        body body loadWalletRequest true "Load details"
+// @Success      200  {object} loadWalletResponse
+// @Failure      400  {object} map[string]string
+// @Failure      404  {object} map[string]string
+// @Failure      500  {object} map[string]string
+// @Router       /v1/wallets/load [post]
 func (h *Handler) LoadWallet(c *gin.Context) {
 	var req loadWalletRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -217,6 +242,18 @@ type hnAuthResponse struct {
 
 // HighnoteAuthorize handles Highnote's JIT authorization webhook.
 // It delegates to the same 5-tier waterfall used by /v1/auth/jit.
+//
+// @Summary      Highnote JIT authorization webhook
+// @Description  Receives Highnote card authorization events and runs the 5-tier funding waterfall (Tally balance → primary bank → secondary bank → leader overwrite → partial auth). Requires X-Tally-Signature and Idempotency-Key headers.
+// @Tags         webhooks
+// @Accept       json
+// @Produce      json
+// @Param        X-Tally-Signature header string true  "HMAC-SHA256 signature: sha256=<hex>"
+// @Param        Idempotency-Key   header string true  "Unique key to deduplicate retries"
+// @Param        body              body   hnAuthRequest true "Highnote authorization event"
+// @Success      200  {object} hnAuthResponse
+// @Failure      400  {object} map[string]string
+// @Router       /v1/webhooks/highnote/authorization [post]
 func (h *Handler) HighnoteAuthorize(c *gin.Context) {
 	var req hnAuthRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

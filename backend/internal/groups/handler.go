@@ -35,6 +35,17 @@ type createGroupResponse struct {
 }
 
 // CreateGroup creates a new tally group and its clearing (liability) ledger account.
+//
+// @Summary      Create a group
+// @Description  Creates a new Tally group and provisions its double-entry liability ledger account.
+// @Tags         groups
+// @Accept       json
+// @Produce      json
+// @Param        body body createGroupRequest true "Group details"
+// @Success      201  {object} createGroupResponse
+// @Failure      400  {object} map[string]string
+// @Failure      500  {object} map[string]string
+// @Router       /v1/groups [post]
 func (h *Handler) CreateGroup(c *gin.Context) {
 	var req createGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -110,6 +121,19 @@ type addMemberResponse struct {
 // AddMember adds a member to an existing group and creates their asset ledger account.
 // SplitWeight defaults to 0.25 if not provided; callers are responsible for
 // ensuring all members' weights sum to 1.0.
+//
+// @Summary      Add a member to a group
+// @Description  Creates a member record (with optional Plaid tokens) and provisions their asset ledger account.
+// @Tags         groups
+// @Accept       json
+// @Produce      json
+// @Param        id   path string          true "Group ID (UUID)"
+// @Param        body body addMemberRequest true "Member details"
+// @Success      201  {object} addMemberResponse
+// @Failure      400  {object} map[string]string
+// @Failure      404  {object} map[string]string
+// @Failure      500  {object} map[string]string
+// @Router       /v1/groups/{id}/members [post]
 func (h *Handler) AddMember(c *gin.Context) {
 	groupID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -204,6 +228,17 @@ type getGroupResponse struct {
 }
 
 // GetGroup returns group metadata and a summary of all members.
+//
+// @Summary      Get a group
+// @Description  Returns group metadata (name, currency) and a summary of all members including balances.
+// @Tags         groups
+// @Produce      json
+// @Param        id  path string true "Group ID (UUID)"
+// @Success      200 {object} getGroupResponse
+// @Failure      400 {object} map[string]string
+// @Failure      404 {object} map[string]string
+// @Failure      500 {object} map[string]string
+// @Router       /v1/groups/{id} [get]
 func (h *Handler) GetGroup(c *gin.Context) {
 	groupID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -268,6 +303,16 @@ type transactionSummary struct {
 }
 
 // ListTransactions returns the 50 most recent transactions for a group.
+//
+// @Summary      List transactions
+// @Description  Returns the 50 most recent transactions for a group, newest first.
+// @Tags         groups
+// @Produce      json
+// @Param        id  path string true "Group ID (UUID)"
+// @Success      200 {object} map[string][]transactionSummary
+// @Failure      400 {object} map[string]string
+// @Failure      500 {object} map[string]string
+// @Router       /v1/groups/{id}/transactions [get]
 func (h *Handler) ListTransactions(c *gin.Context) {
 	groupID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
