@@ -160,8 +160,14 @@ func (h *Handler) AddMember(c *gin.Context) {
 		return
 	}
 
+	clerkUserID, _ := c.Get("clerk_user_id")
+	userID, _ := clerkUserID.(string)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
+		return
+	}
+
 	memberID := uuid.New()
-	userID := uuid.New() // no auth system yet — generate a stable user_id
 	accountID := uuid.New()
 
 	tx, err := h.db.BeginTx(c.Request.Context(), nil)
@@ -200,10 +206,10 @@ func (h *Handler) AddMember(c *gin.Context) {
 		return
 	}
 
-	slog.InfoContext(c.Request.Context(), "member added", "member_id", memberID, "group_id", groupID)
+	slog.InfoContext(c.Request.Context(), "member added", "member_id", memberID, "group_id", groupID, "user_id", userID)
 	c.JSON(http.StatusCreated, addMemberResponse{
 		MemberID:    memberID.String(),
-		UserID:      userID.String(),
+		UserID:      userID,
 		DisplayName: req.DisplayName,
 		SplitWeight: req.SplitWeight,
 	})

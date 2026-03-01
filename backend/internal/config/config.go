@@ -17,6 +17,8 @@ type Config struct {
 	HighnoteAPIKey         string // leave empty → mock client
 	HighnoteCardProductID  string // card product configured in the Highnote dashboard
 	HighnoteWebhookSecret  string // shared secret for verifying Highnote webhook signatures
+	// Clerk — leave empty to disable JWT auth (local development only).
+	ClerkJWKSURL string // e.g. https://<clerk-domain>/.well-known/jwks.json
 }
 
 func Load() *Config {
@@ -32,6 +34,7 @@ func Load() *Config {
 		HighnoteAPIKey:         getEnv("HIGHNOTE_API_KEY", ""),
 		HighnoteCardProductID:  getEnv("HIGHNOTE_CARD_PRODUCT_ID", "dev_card_product"),
 		HighnoteWebhookSecret:  getEnv("HIGHNOTE_WEBHOOK_SECRET", "dev_hn_webhook_secret"),
+		ClerkJWKSURL:           getEnv("CLERK_JWKS_URL", ""),
 	}
 }
 

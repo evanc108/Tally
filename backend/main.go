@@ -95,35 +95,38 @@ func main() {
 
 	v1 := r.Group("/v1")
 	{
-		// ── Existing JIT endpoint (generic card-processor format) ─────────────
-		authGroup := v1.Group("/auth")
+		// ── Machine-to-machine routes (HMAC, no JWT) ──────────────────────────
 		// HMAC verification must run before idempotency so we don't cache
 		// responses to unsigned (potentially spoofed) requests.
+		authGroup := v1.Group("/auth")
 		authGroup.Use(middleware.HMACVerification(cfg.WebhookSecret))
 		authGroup.Use(middleware.Idempotency(rdb))
-
 		jit := auth.NewJITHandler(pool, rdb, cfg, plaidClient)
 		authGroup.POST("/jit", jit.Authorize)
 
-		// ── Group + member management ─────────────────────────────────────────
-		groupHandler := groups.NewHandler(pool)
-		v1.POST("/groups",                      groupHandler.CreateGroup)
-		v1.POST("/groups/:id/members",          groupHandler.AddMember)
-		v1.GET("/groups/:id",                   groupHandler.GetGroup)
-		v1.GET("/groups/:id/transactions",      groupHandler.ListTransactions)
-
-		// ── Card issuing + wallet loading ─────────────────────────────────────
 		cardHandler := cards.NewHandler(pool, rdb, cfg, hnClient, plaidClient)
 
-		v1.POST("/cards/issue",  cardHandler.IssueCard)
-		v1.POST("/wallets/load", cardHandler.LoadWallet)
-
-		// ── Highnote JIT authorization webhook ────────────────────────────────
-		// Uses the Highnote webhook secret for HMAC; idempotency via Redis.
 		hnWebhook := v1.Group("/webhooks/highnote")
 		hnWebhook.Use(middleware.HMACVerification(cfg.HighnoteWebhookSecret))
 		hnWebhook.Use(middleware.Idempotency(rdb))
 		hnWebhook.POST("/authorization", cardHandler.HighnoteAuthorize)
+
+		// ── User-facing routes (Clerk JWT required) ───────────────────────────
+		api := v1.Group("")
+		if cfg.ClerkJWKSURL != "" {
+			api.Use(middleware.ClerkAuth(cfg.ClerkJWKSURL))
+		} else {
+			slog.Warn("CLERK_JWKS_URL not set — JWT auth disabled (development mode only)")
+		}
+
+		groupHandler := groups.NewHandler(pool)
+		api.POST("/groups",                 groupHandler.CreateGroup)
+		api.POST("/groups/:id/members",     groupHandler.AddMember)
+		api.GET("/groups/:id",              groupHandler.GetGroup)
+		api.GET("/groups/:id/transactions", groupHandler.ListTransactions)
+
+		api.POST("/cards/issue",  cardHandler.IssueCard)
+		api.POST("/wallets/load", cardHandler.LoadWallet)
 	}
 
 	// ── HTTP server with graceful shutdown ────────────────────────────────────
