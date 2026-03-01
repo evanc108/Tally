@@ -14,6 +14,7 @@ import (
 	"github.com/tally/backend/internal/cards"
 	"github.com/tally/backend/internal/config"
 	"github.com/tally/backend/internal/db"
+	"github.com/tally/backend/internal/groups"
 	"github.com/tally/backend/internal/highnote"
 	"github.com/tally/backend/internal/middleware"
 	"github.com/tally/backend/internal/plaid"
@@ -93,6 +94,13 @@ func main() {
 
 		jit := auth.NewJITHandler(pool, rdb, cfg, plaidClient)
 		authGroup.POST("/jit", jit.Authorize)
+
+		// ── Group + member management ─────────────────────────────────────────
+		groupHandler := groups.NewHandler(pool)
+		v1.POST("/groups",                      groupHandler.CreateGroup)
+		v1.POST("/groups/:id/members",          groupHandler.AddMember)
+		v1.GET("/groups/:id",                   groupHandler.GetGroup)
+		v1.GET("/groups/:id/transactions",      groupHandler.ListTransactions)
 
 		// ── Card issuing + wallet loading ─────────────────────────────────────
 		cardHandler := cards.NewHandler(pool, rdb, cfg, hnClient, plaidClient)
