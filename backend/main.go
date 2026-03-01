@@ -1,0 +1,140 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/tally/backend/internal/auth"
+	"github.com/tally/backend/internal/cards"
+	"github.com/tally/backend/internal/config"
+	"github.com/tally/backend/internal/db"
+	"github.com/tally/backend/internal/highnote"
+	"github.com/tally/backend/internal/middleware"
+	"github.com/tally/backend/internal/plaid"
+)
+
+func main() {
+	// Structured JSON logging — readable by Cloud Logging, Datadog, etc.
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+
+	cfg := config.Load()
+
+	if cfg.Environment == "production" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	// ── Datastore connections ─────────────────────────────────────────────────
+	pool, err := db.Connect(cfg.DatabaseURL)
+	if err != nil {
+		slog.Error("postgres connect failed", "error", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	rdb, err := db.ConnectRedis(cfg.RedisURL)
+	if err != nil {
+		slog.Error("redis connect failed", "error", err)
+		os.Exit(1)
+	}
+	defer rdb.Close()
+
+	// ── Schema migrations (idempotent — safe to run on every boot) ────────────
+	if err := db.Migrate(cfg.DatabaseURL); err != nil {
+		slog.Error("migration failed", "error", err)
+		os.Exit(1)
+	}
+
+	// ── Clients ───────────────────────────────────────────────────────────────
+	// Use the mock Highnote client unless a real API key is configured.
+	var hnClient highnote.CardIssuingClient
+	if cfg.HighnoteAPIKey != "" {
+		hnClient = highnote.NewRealClient(cfg.HighnoteAPIKey)
+		slog.Info("highnote real client active")
+	} else {
+		hnClient = highnote.NewMockClient()
+		slog.Info("highnote mock client active")
+	}
+
+	var plaidClient plaid.BalanceClient
+	if cfg.PlaidClientID != "" {
+		plaidClient = plaid.NewRealClient(cfg.PlaidClientID, cfg.PlaidSecret, cfg.PlaidEnv)
+		slog.Info("plaid real client active", "env", cfg.PlaidEnv)
+	} else {
+		plaidClient = plaid.NewMockClient()
+		slog.Info("plaid mock client active")
+	}
+
+	// ── Router ────────────────────────────────────────────────────────────────
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(middleware.RequestLogger())
+
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	v1 := r.Group("/v1")
+	{
+		// ── Existing JIT endpoint (generic card-processor format) ─────────────
+		authGroup := v1.Group("/auth")
+		// HMAC verification must run before idempotency so we don't cache
+		// responses to unsigned (potentially spoofed) requests.
+		authGroup.Use(middleware.HMACVerification(cfg.WebhookSecret))
+		authGroup.Use(middleware.Idempotency(rdb))
+
+		jit := auth.NewJITHandler(pool, rdb, cfg, plaidClient)
+		authGroup.POST("/jit", jit.Authorize)
+
+		// ── Card issuing + wallet loading ─────────────────────────────────────
+		cardHandler := cards.NewHandler(pool, rdb, cfg, hnClient, plaidClient)
+
+		v1.POST("/cards/issue",  cardHandler.IssueCard)
+		v1.POST("/wallets/load", cardHandler.LoadWallet)
+
+		// ── Highnote JIT authorization webhook ────────────────────────────────
+		// Uses the Highnote webhook secret for HMAC; idempotency via Redis.
+		hnWebhook := v1.Group("/webhooks/highnote")
+		hnWebhook.Use(middleware.HMACVerification(cfg.HighnoteWebhookSecret))
+		hnWebhook.Use(middleware.Idempotency(rdb))
+		hnWebhook.POST("/authorization", cardHandler.HighnoteAuthorize)
+	}
+
+	// ── HTTP server with graceful shutdown ────────────────────────────────────
+	srv := &http.Server{
+		Addr:         ":" + cfg.Port,
+		Handler:      r,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	go func() {
+		slog.Info("tally backend starting", "port", cfg.Port, "env", cfg.Environment)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("server error", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	slog.Info("shutdown signal received — draining connections")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		slog.Error("shutdown error", "error", err)
+	}
+	slog.Info("tally backend stopped")
+}
