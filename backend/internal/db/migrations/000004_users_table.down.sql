@@ -1,0 +1,2 @@
+ALTER TABLE members DROP CONSTRAINT IF EXISTS members_user_id_fkey;
+DROP TABLE IF EXISTS users;

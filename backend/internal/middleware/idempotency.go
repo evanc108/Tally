@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -17,6 +18,9 @@ const (
 	lockKeyPrefix     = "idem:lock:"
 	cacheTTL          = 24 * time.Hour
 	lockTTL           = 30 * time.Second
+	// delTimeout is the budget for releasing the lock after the handler returns.
+	// Kept short so a slow Redis doesn't hold up the goroutine indefinitely.
+	delTimeout = 3 * time.Second
 )
 
 // cachedResponse is the envelope stored in Redis.
@@ -33,6 +37,12 @@ type cachedResponse struct {
 //   - A concurrent duplicate receives 409 and should retry after ~1 s.
 //   - Once the response is cached, the lock is released and future duplicates
 //     get the cached reply immediately.
+//
+// Redis-down behaviour:
+//   - Cache miss: falls through to normal processing (safe).
+//   - Lock unavailable (err): logs a warning and proceeds without locking.
+//     The DB-level UNIQUE constraint on idempotency_key acts as a fallback guard.
+//   - Lock held by another request: still returns 409 (correct behaviour).
 func Idempotency(rdb *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		key := c.GetHeader(idempotencyHeader)
@@ -58,15 +68,29 @@ func Idempotency(rdb *redis.Client) gin.HandlerFunc {
 
 		// ── 2. Acquire processing lock (cold path) ────────────────────────────
 		acquired, err := rdb.SetNX(ctx, lockKey, "1", lockTTL).Result()
-		if err != nil || !acquired {
+		if err != nil {
+			// Redis is unavailable. Log and proceed without locking — the DB
+			// UNIQUE constraint on idempotency_key is the fallback duplicate guard.
+			slog.WarnContext(ctx, "idempotency lock unavailable — Redis down, proceeding without lock",
+				"idempotency_key", key, "error", err)
+		} else if !acquired {
+			// Another request with the same key is in flight.
 			c.AbortWithStatusJSON(http.StatusConflict, gin.H{
 				"error":   "duplicate_in_flight",
 				"message": "An identical request is being processed. Retry in ~1s.",
 			})
 			return
 		}
-		// Release lock after this function returns (regardless of panic).
-		defer rdb.Del(context.Background(), lockKey) //nolint:errcheck
+
+		// Release lock after handler returns. Use a fixed timeout so that a
+		// slow Redis call cannot hold the goroutine open indefinitely.
+		if acquired {
+			defer func() {
+				delCtx, delCancel := context.WithTimeout(context.Background(), delTimeout)
+				defer delCancel()
+				rdb.Del(delCtx, lockKey) //nolint:errcheck
+			}()
+		}
 
 		// ── 3. Execute handler, intercept the response ────────────────────────
 		rw := &bodyCapture{

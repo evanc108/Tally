@@ -38,6 +38,23 @@ func Load() *Config {
 	}
 }
 
+// Validate panics at startup if production-critical secrets are still set to
+// their insecure development defaults. Call this immediately after Load().
+func (c *Config) Validate() {
+	if c.Environment != "production" {
+		return
+	}
+	if c.WebhookSecret == "dev_webhook_secret_change_in_prod" {
+		panic("WEBHOOK_SECRET must be overridden in production — refusing to start with default value")
+	}
+	if c.HighnoteWebhookSecret == "dev_hn_webhook_secret" {
+		panic("HIGHNOTE_WEBHOOK_SECRET must be overridden in production — refusing to start with default value")
+	}
+	if c.HighnoteCardProductID == "dev_card_product" {
+		panic("HIGHNOTE_CARD_PRODUCT_ID must be overridden in production — refusing to start with default value")
+	}
+}
+
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

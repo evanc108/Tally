@@ -5,10 +5,8 @@ package cards
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +16,13 @@ import (
 	"github.com/tally/backend/internal/highnote"
 	"github.com/tally/backend/internal/ledger"
 	"github.com/tally/backend/internal/plaid"
+	"github.com/tally/backend/internal/waterfall"
+)
+
+const (
+	issueCardTimeout    = 15 * time.Second
+	loadWalletTimeout   = 10 * time.Second
+	highnoteAuthTimeout = 7 * time.Second // Highnote webhook timeout is ~10 s; leave headroom
 )
 
 // Handler handles card-issuing and wallet-loading routes.
@@ -83,7 +88,7 @@ func (h *Handler) IssueCard(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), issueCardTimeout)
 	defer cancel()
 
 	// 1. Create cardholder in Highnote.
@@ -172,7 +177,7 @@ func (h *Handler) LoadWallet(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), loadWalletTimeout)
 	defer cancel()
 
 	// Fetch the cardholder ID and current balance in one query.
@@ -227,17 +232,17 @@ type hnMerchant struct {
 }
 
 type hnAuthRequest struct {
-	ID                    string     `json:"id"`
-	Type                  string     `json:"type"`
-	AuthorizationRequestID string    `json:"authorizationRequestId"`
-	CardID                string     `json:"cardId"`
-	TransactionAmount     hnAmount   `json:"transactionAmount"`
-	MerchantDetails       hnMerchant `json:"merchantDetails"`
+	ID                     string     `json:"id"`
+	Type                   string     `json:"type"`
+	AuthorizationRequestID string     `json:"authorizationRequestId"`
+	CardID                 string     `json:"cardId"`
+	TransactionAmount      hnAmount   `json:"transactionAmount"`
+	MerchantDetails        hnMerchant `json:"merchantDetails"`
 }
 
 type hnAuthResponse struct {
-	AuthorizationResponseCode  string    `json:"authorizationResponseCode"`
-	ApprovedTransactionAmount  *hnAmount `json:"approvedTransactionAmount,omitempty"`
+	AuthorizationResponseCode string    `json:"authorizationResponseCode"`
+	ApprovedTransactionAmount *hnAmount `json:"approvedTransactionAmount,omitempty"`
 }
 
 // HighnoteAuthorize handles Highnote's JIT authorization webhook.
@@ -267,8 +272,7 @@ func (h *Handler) HighnoteAuthorize(c *gin.Context) {
 		return
 	}
 
-	// Budget 7 s — Highnote's webhook timeout is ~10 s; we need headroom.
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 7*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), highnoteAuthTimeout)
 	defer cancel()
 
 	log := slog.With(
@@ -277,8 +281,8 @@ func (h *Handler) HighnoteAuthorize(c *gin.Context) {
 		"amount_cents", req.TransactionAmount.Value,
 	)
 
-	// Resolve card → group + members (reuse the same SQL as the JIT handler).
-	groupID, members, groupAccountID, err := h.resolveCard(ctx, req.CardID)
+	// Resolve card → group + members.
+	groupID, members, groupAccountID, err := waterfall.ResolveCard(ctx, h.db, req.CardID)
 	if err != nil {
 		log.ErrorContext(ctx, "card resolution failed", "error", err)
 		c.JSON(http.StatusOK, hnAuthResponse{AuthorizationResponseCode: "DO_NOT_HONOR"})
@@ -298,10 +302,10 @@ func (h *Handler) HighnoteAuthorize(c *gin.Context) {
 	}
 
 	// Fan out balance checks.
-	balances := h.parallelBalanceCheck(ctx, members)
+	balances := waterfall.ParallelBalanceCheck(ctx, h.plaid, members)
 
 	// Run the 5-tier waterfall.
-	splits, ious, approvedCents, err := buildFundingPlan(balances, req.TransactionAmount.Value)
+	splits, ious, approvedCents, err := waterfall.BuildFundingPlan(balances, req.TransactionAmount.Value)
 	if err != nil || approvedCents == 0 {
 		reason := "insufficient_funds"
 		if err != nil {
@@ -338,242 +342,7 @@ func (h *Handler) HighnoteAuthorize(c *gin.Context) {
 	})
 }
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
-
-type memberRow struct {
-	ID                    uuid.UUID
-	AccountID             uuid.UUID
-	PlaidAccessToken      string
-	PlaidAccountID        string
-	BackupPlaidAccessToken string
-	BackupPlaidAccountID  string
-	TallyBalanceCents     int64
-	SplitWeight           float64
-	IsLeader              bool
-	LeaderPreAuthorized   bool
-}
-
-type balanceResult struct {
-	member          memberRow
-	primaryBalance  int64
-	secondaryBalance int64
-	primaryErr      error
-	secondaryErr    error
-}
-
-// resolveCard is identical to the one in auth/jit.go but lives here so the
-// cards package has no import cycle with auth.
-func (h *Handler) resolveCard(ctx context.Context, cardToken string) (
-	groupID uuid.UUID,
-	members []memberRow,
-	groupAccountID uuid.UUID,
-	err error,
-) {
-	const q = `
-		SELECT
-			m.id,
-			ma.id                                      AS account_id,
-			COALESCE(m.plaid_access_token,         '') AS plaid_access_token,
-			COALESCE(m.plaid_account_id,           '') AS plaid_account_id,
-			COALESCE(m.backup_plaid_access_token,  '') AS backup_plaid_access_token,
-			COALESCE(m.backup_plaid_account_id,    '') AS backup_plaid_account_id,
-			m.tally_balance_cents,
-			m.split_weight::float8,
-			m.is_leader,
-			m.leader_pre_authorized,
-			m.group_id,
-			ga.id                                      AS group_account_id
-		FROM members m
-		JOIN accounts ma ON ma.owner_id = m.id       AND ma.account_type = 'asset'
-		JOIN accounts ga ON ga.owner_id = m.group_id AND ga.account_type = 'liability'
-		WHERE m.group_id = (
-			SELECT group_id FROM members WHERE card_token = $1 LIMIT 1
-		)
-	`
-	rows, err := h.db.QueryContext(ctx, q, cardToken)
-	if err != nil {
-		return uuid.Nil, nil, uuid.Nil, fmt.Errorf("query members: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var m memberRow
-		var gID, gaID uuid.UUID
-		if err = rows.Scan(
-			&m.ID, &m.AccountID,
-			&m.PlaidAccessToken, &m.PlaidAccountID,
-			&m.BackupPlaidAccessToken, &m.BackupPlaidAccountID,
-			&m.TallyBalanceCents, &m.SplitWeight,
-			&m.IsLeader, &m.LeaderPreAuthorized,
-			&gID, &gaID,
-		); err != nil {
-			return uuid.Nil, nil, uuid.Nil, fmt.Errorf("scan member: %w", err)
-		}
-		if groupID == uuid.Nil {
-			groupID = gID
-			groupAccountID = gaID
-		}
-		members = append(members, m)
-	}
-	if err = rows.Err(); err != nil {
-		return uuid.Nil, nil, uuid.Nil, err
-	}
-	if len(members) == 0 {
-		return uuid.Nil, nil, uuid.Nil, fmt.Errorf("no members found for card_token")
-	}
-	return
-}
-
-func (h *Handler) parallelBalanceCheck(ctx context.Context, members []memberRow) []balanceResult {
-	results := make([]balanceResult, len(members))
-	var wg sync.WaitGroup
-
-	for i, m := range members {
-		wg.Add(1)
-		go func(idx int, member memberRow) {
-			defer wg.Done()
-			r := balanceResult{member: member}
-
-			// Primary and secondary bank checks fan out together.
-			var inner sync.WaitGroup
-			inner.Add(1)
-			go func() {
-				defer inner.Done()
-				bal, err := h.plaid.GetAccountBalance(ctx, member.PlaidAccessToken, member.PlaidAccountID)
-				r.primaryBalance = bal
-				r.primaryErr = err
-			}()
-
-			if member.BackupPlaidAccountID != "" {
-				inner.Add(1)
-				go func() {
-					defer inner.Done()
-					bal, err := h.plaid.GetAccountBalance(ctx, member.BackupPlaidAccessToken, member.BackupPlaidAccountID)
-					r.secondaryBalance = bal
-					r.secondaryErr = err
-				}()
-			}
-			inner.Wait()
-			results[idx] = r
-		}(i, m)
-	}
-
-	wg.Wait()
-	return results
-}
-
-// buildFundingPlan applies the 5-tier waterfall and returns splits, IOUs, and
-// the total approved amount in cents. If approvedCents == 0 the entire transaction
-// should be declined.
-//
-// Tier 1 — tally_balance (internal wallet)
-// Tier 2 — primary bank pull (direct_pull)
-// Tier 3 — secondary bank pull (secondary_bank)
-// Tier 4 — leader overwrite + IOU (leader_overwrite)
-// Tier 5 — partial auth (approve whatever is available)
-func buildFundingPlan(
-	results []balanceResult,
-	totalAmountCents int64,
-) (splits []ledger.SplitEntry, ious []ledger.IOUEntry, approvedCents int64, err error) {
-	// Find the pre-authorized leader (if any) from the result set.
-	var leader *balanceResult
-	for i := range results {
-		if results[i].member.IsLeader && results[i].member.LeaderPreAuthorized {
-			leader = &results[i]
-			break
-		}
-	}
-
-	splits = make([]ledger.SplitEntry, 0, len(results))
-
-	for _, r := range results {
-		if r.primaryErr != nil {
-			// Treat a bank check error as zero available from that source.
-			slog.Warn("primary balance check failed, treating as zero",
-				"member_id", r.member.ID, "error", r.primaryErr)
-		}
-
-		share := int64(float64(totalAmountCents) * r.member.SplitWeight)
-		wallet := r.member.TallyBalanceCents
-		primary := r.primaryBalance
-		secondary := r.secondaryBalance
-
-		entry := ledger.SplitEntry{
-			MemberID:    r.member.ID,
-			AccountID:   r.member.AccountID,
-			AmountCents: share,
-			FundingType: ledger.FundingTallyBalance,
-		}
-
-		// Tier 1: internal wallet covers the whole share.
-		if wallet >= share {
-			entry.FundingType = ledger.FundingTallyBalance
-			splits = append(splits, entry)
-			approvedCents += share
-			continue
-		}
-
-		// Tier 2: wallet + primary bank covers the whole share.
-		if wallet+primary >= share {
-			entry.FundingType = ledger.FundingDirectPull
-			splits = append(splits, entry)
-			approvedCents += share
-			continue
-		}
-
-		// Tier 3: wallet + primary + secondary bank covers the whole share.
-		if r.member.BackupPlaidAccountID != "" && r.secondaryErr == nil &&
-			wallet+primary+secondary >= share {
-			entry.FundingType = ledger.FundingSecondaryBank
-			splits = append(splits, entry)
-			approvedCents += share
-			continue
-		}
-
-		// Tier 4: leader covers the shortfall.
-		if leader != nil && leader.member.ID != r.member.ID {
-			available := wallet + primary
-			if r.member.BackupPlaidAccountID != "" && r.secondaryErr == nil {
-				available += secondary
-			}
-			shortfall := share - available
-			leaderAvailable := leader.member.TallyBalanceCents + leader.primaryBalance
-			if leaderAvailable >= shortfall {
-				leaderID := leader.member.ID
-				entry.FundingType = ledger.FundingLeaderOverwrite
-				entry.LeaderMemberID = &leaderID
-				splits = append(splits, entry)
-				ious = append(ious, ledger.IOUEntry{
-					DebtorMemberID:   r.member.ID,
-					CreditorMemberID: leader.member.ID,
-					AmountCents:      shortfall,
-				})
-				approvedCents += share
-				continue
-			}
-		}
-
-		// Tier 5: partial auth — approve only what the member actually has.
-		available := wallet + primary
-		if r.member.BackupPlaidAccountID != "" && r.secondaryErr == nil {
-			available += secondary
-		}
-		if available > share {
-			available = share
-		}
-		if available > 0 {
-			entry.AmountCents = available
-			entry.FundingType = ledger.FundingDirectPull
-			if available <= wallet {
-				entry.FundingType = ledger.FundingTallyBalance
-			}
-			splits = append(splits, entry)
-		}
-		approvedCents += available
-	}
-
-	return splits, ious, approvedCents, nil
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 func (h *Handler) insertPendingTransaction(
 	ctx context.Context,

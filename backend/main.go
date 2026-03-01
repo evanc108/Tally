@@ -27,6 +27,7 @@ import (
 	"github.com/tally/backend/internal/highnote"
 	"github.com/tally/backend/internal/middleware"
 	"github.com/tally/backend/internal/plaid"
+	"github.com/tally/backend/internal/users"
 )
 
 func main() {
@@ -37,6 +38,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	cfg := config.Load()
+	cfg.Validate()
 
 	if cfg.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
@@ -96,9 +98,12 @@ func main() {
 	v1 := r.Group("/v1")
 	{
 		// ── Machine-to-machine routes (HMAC, no JWT) ──────────────────────────
+		// Middleware order: rate limit → HMAC verification → idempotency.
+		// Rate limiting runs first to shed load before we touch Redis or the DB.
 		// HMAC verification must run before idempotency so we don't cache
 		// responses to unsigned (potentially spoofed) requests.
 		authGroup := v1.Group("/auth")
+		authGroup.Use(middleware.RateLimit(rdb, 120, time.Minute))
 		authGroup.Use(middleware.HMACVerification(cfg.WebhookSecret))
 		authGroup.Use(middleware.Idempotency(rdb))
 		jit := auth.NewJITHandler(pool, rdb, cfg, plaidClient)
@@ -107,6 +112,7 @@ func main() {
 		cardHandler := cards.NewHandler(pool, rdb, cfg, hnClient, plaidClient)
 
 		hnWebhook := v1.Group("/webhooks/highnote")
+		hnWebhook.Use(middleware.RateLimit(rdb, 120, time.Minute))
 		hnWebhook.Use(middleware.HMACVerification(cfg.HighnoteWebhookSecret))
 		hnWebhook.Use(middleware.Idempotency(rdb))
 		hnWebhook.POST("/authorization", cardHandler.HighnoteAuthorize)
@@ -118,6 +124,9 @@ func main() {
 		} else {
 			slog.Warn("CLERK_JWKS_URL not set — JWT auth disabled (development mode only)")
 		}
+
+		userHandler := users.NewHandler(pool)
+		api.POST("/users/me", userHandler.Me)
 
 		groupHandler := groups.NewHandler(pool)
 		api.POST("/groups",                 groupHandler.CreateGroup)
