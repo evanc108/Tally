@@ -16,18 +16,35 @@ Tally solves this at the infrastructure level. When a Tally card is swiped, the 
 
 ## How It Works
 
-### 1. Just-In-Time (JIT) Funding
+### 1. The Proxy Card Architecture
 
-The centerpiece of Tally is its authorization engine. When a Tally card is presented at a merchant:
+Tally doesn't share a single card across group members. Instead, it uses a **Proxy Model** powered by Highnote's Collaborative Authorization:
+
+- **One Group Account**: Each Tally group has a single virtual financial account set to On-Demand Funding (JIT Funding). Its balance is always $0.00 until a transaction happens.
+- **Per-Member Card Tokens**: Every member receives their own unique virtual card token, added to their individual Apple/Google Wallet. To each user, it feels like they're all using the "Group Card."
+- **Token-to-Group Mapping**: In the backend, all member tokens map to the same Group ID. When any member taps their phone, Tally knows exactly which group to charge and which member initiated the purchase.
+
+This proxy model solves the problems of traditional shared cards:
+
+| Problem | Traditional Shared Card | Tally Proxy Model |
+|---------|------------------------|-------------------|
+| KYC/Identity | Who is legally responsible for the debt? | Each member is KYC'd individually; the Leader owns the group account |
+| Security | If one person loses the card, everyone is locked out | You can freeze one member's token without affecting others |
+| Tracking | Hard to see who spent what | Every transaction is tagged with the specific member's token ID |
+| Limits | One shared limit for the whole group | Per-member spending limits (e.g., $50 for Member A, $500 for the Leader) |
+
+### 2. Just-In-Time (JIT) Collaborative Authorization
+
+When any group member taps their card token at a merchant, Highnote sends a webhook to Tally's backend:
 
 ```
-Card swiped at register
+Member taps their card token at register
         │
         ▼
-Tally backend receives authorization request
+Highnote sends authorization webhook to Tally
         │
         ▼
-Identify group members from card token
+Backend maps card token → Group ID + initiating member
         │
         ▼
 Check all members' balances simultaneously (parallel Plaid calls)
@@ -35,8 +52,8 @@ Check all members' balances simultaneously (parallel Plaid calls)
         ├─ Everyone can cover their share?
         │         │
         │         ▼
-        │    APPROVE — merchant gets full amount
-        │    Each member's account is debited their share atomically
+        │    APPROVE — Highnote pulls from Product Funding Account
+        │    Backend triggers individual pulls from each member
         │
         └─ Anyone short?
                   │
@@ -46,7 +63,7 @@ Check all members' balances simultaneously (parallel Plaid calls)
 
 Total latency budget: **8 seconds** (bounded by the card network's authorization window). In practice, parallel balance checks typically resolve in 50–100ms.
 
-### 2. Hybrid Funding Waterfall
+### 3. Hybrid Funding Waterfall
 
 Each member's share is funded in priority order:
 
@@ -58,7 +75,7 @@ Each member's share is funded in priority order:
 
 A partial approval is never issued. Either the full amount is approved with every member covered, or the transaction is declined entirely.
 
-### 3. Leader Cover Fail-Safe
+### 4. Leader Cover Fail-Safe
 
 To prevent embarrassing card declines when one member is temporarily short, Tally supports a **Leader Cover** system:
 
@@ -69,7 +86,7 @@ To prevent embarrassing card declines when one member is temporarily short, Tall
 
 The card never declines due to one person's insufficient funds. The group always completes the purchase.
 
-### 4. The Double-Entry Ledger
+### 5. The Double-Entry Ledger
 
 Every swipe produces an immutable accounting record using double-entry bookkeeping:
 
@@ -98,16 +115,17 @@ Reversals (merchant refunds) create new offsetting entries — original records 
 1. **Create a Circle** — Give it a name ("Ski Trip 2026", "Shared Apartment") and currency
 2. **Add Members** — Invite friends; each member links their bank account via Plaid
 3. **Configure Splits** — Choose equal, percentage-based, or weighted splits (e.g., one person pays 2× because they're upgrading their room)
-4. **Designate a Leader** — The person whose account serves as the fail-safe backstop
-5. **Issue a Card** — A virtual card is issued instantly to the leader's Apple/Google Wallet, or a physical card can be ordered
+4. **Designate a Leader** — The person whose account serves as the fail-safe backstop and owns the group's financial account
+5. **Issue Card Tokens** — Each member receives their own unique virtual card token, instantly added to their Apple/Google Wallet. Every token maps to the same group, so any member can initiate a purchase on behalf of the circle
 
 ### Making a Purchase
 
-1. Member (typically the leader) taps/swipes the Tally card at a merchant
-2. The card network pings Tally's backend with the charge amount
-3. Tally checks every member's balance in parallel — this takes ~50–100ms
-4. If approved, the merchant receives the full amount; each member's share is debited simultaneously
-5. Every member sees the transaction appear in the app in real-time with their individual share
+1. **Any member** taps their personal card token at a merchant
+2. Highnote sends an authorization webhook to Tally's backend with the token ID and charge amount
+3. Tally maps the token to the group and identifies all members
+4. Tally checks every member's balance in parallel — this takes ~50–100ms
+5. If approved, Highnote pulls the full amount from the Product Funding Account; Tally simultaneously triggers individual pulls from each member's funding source
+6. Every member sees the transaction appear in the app in real-time with their individual share, tagged with who initiated it
 
 ### When a Member Is Short
 
@@ -148,14 +166,17 @@ Split weights are stored as 6-decimal-precision fractions (e.g., `0.250000`). Th
 
 ---
 
-## Card Types
+## Card Tokens
 
-| Type | Issuance | Best For |
-|------|----------|----------|
-| **Virtual Card** | Instant — added to Apple/Google Wallet | Weekend trips, one-time events |
-| **Physical Card** | 3–5 business days | Recurring groups (roommates, teams) |
+Each member in a circle receives their own unique virtual card token via Highnote. Tokens are digital cards added to Apple/Google Wallet — no physical plastic required for the proxy model.
 
-Cards are issued via Highnote (card processor) and linked to a specific member within a circle. A single member can hold cards across multiple circles.
+| Property | Description |
+|----------|-------------|
+| **Token ID** | Highnote's unique identifier for the digital wallet token |
+| **User ID** | The Tally user who owns this phone/token |
+| **Group ID** | The circle this token is currently acting for |
+
+A single member can hold tokens across multiple circles. Tokens can be individually frozen, rate-limited, or revoked without affecting other group members.
 
 ---
 
@@ -259,7 +280,7 @@ pgAdmin is at `http://localhost:5050` (email: `admin@tally.local`, password: `ad
 | `GET` | `/v1/groups/:id` | Get group with members |
 | `POST` | `/v1/groups/:id/members` | Add a member to a group |
 | `GET` | `/v1/groups/:id/transactions` | List recent transactions |
-| `POST` | `/v1/cards/issue` | Issue a virtual card to a member |
+| `POST` | `/v1/cards/issue` | Issue a virtual card token to a member |
 | `POST` | `/v1/wallets/load` | Pre-load a member's Tally wallet |
 | `POST` | `/v1/auth/jit` | JIT authorization (called by card processor) |
 | `POST` | `/v1/webhooks/highnote/authorization` | Highnote authorization webhook |

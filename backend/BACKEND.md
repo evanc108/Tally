@@ -2,7 +2,7 @@
 
 ## Overview
 
-Tally's backend is a Go service that powers real-time group spending. When one member of a group swipes a card, the backend authorizes the charge in milliseconds by verifying that every member of the group can cover their individual share — simultaneously — before approving the transaction.
+Tally's backend is a Go service that powers real-time group spending using a **Proxy Card Architecture**. Rather than sharing a single card, each group member receives their own unique virtual card token — all mapped to the same group. When any member taps their token at a merchant, the backend authorizes the charge in milliseconds by verifying that every member of the group can cover their individual share — simultaneously — before approving the transaction.
 
 The core metaphor is the **Tally Stick**: a single transaction is split into multiple verifiable pieces, one per member, each recorded as an immutable ledger entry.
 
@@ -65,17 +65,20 @@ Represents a spending group (e.g. "Weekend Trip", "Shared Apartment").
 | currency | CHAR(3) | Default `USD` |
 
 ### `members`
-One row per user per group. A user in three groups has three rows.
+One row per user per group. A user in three groups has three rows. Each member receives their own unique card token — this is the core of the **Proxy Card Model**. All tokens in a group map to the same `group_id`, so when any member swipes, the backend resolves the token to the group and knows exactly who initiated the purchase.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | UUID | Primary key |
-| group_id | UUID | FK → tally_groups |
-| card_token | TEXT | Unique. The virtual card ID issued by the card processor |
+| group_id | UUID | FK → tally_groups. All members' tokens map to this group |
+| card_token | TEXT | Unique. The member's personal virtual card token issued by Highnote. Added to their Apple/Google Wallet |
+| user_id | UUID | The Tally user who owns this token |
 | plaid_access_token | TEXT | Plaid Link credential for this member's bank |
 | plaid_account_id | TEXT | Specific bank account to check |
 | tally_balance_cents | BIGINT | Pre-loaded wallet balance. Checked first before hitting the bank |
 | split_weight | NUMERIC(7,6) | Fractional share of group expenses (e.g. `0.250000` for a 4-way equal split) |
+
+The card token mapping enables per-member controls: individual tokens can be frozen, rate-limited, or revoked without affecting other group members.
 
 ### `accounts`
 Ledger accounts. Each **member** gets one `asset` account. Each **group** gets one `liability` (clearing) account.
@@ -153,13 +156,14 @@ All three use **SERIALIZABLE isolation** in Postgres to prevent phantom reads wh
 
 ---
 
-## The JIT Authorization Flow
+## The JIT Collaborative Authorization Flow
 
-`POST /v1/auth/jit` is the critical path. It must respond within milliseconds or the card processor will timeout and decline automatically. The handler has an **8-second budget** for the entire flow.
+`POST /v1/auth/jit` is the critical path — the Collaborative Authorization endpoint. When any group member taps their personal card token at a merchant, Highnote sends a webhook to this endpoint. It must respond in <2 seconds or the card processor will timeout and decline automatically. The handler has an **8-second budget** for the entire flow.
 
 ```
-Card Processor
+Highnote (Card Processor)
      │
+     │  "Card Token A (Member 1) is trying to spend $90"
      │  POST /v1/auth/jit
      │  X-Tally-Signature: sha256=<hex>
      │  Idempotency-Key: <uuid>
@@ -172,15 +176,17 @@ Card Processor
      │
      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  JIT Handler                                                │
+│  JIT Handler (Collaborative Authorization)                  │
 │                                                             │
 │  Step 1: resolveCard()                                      │
-│    SQL query: card_token → group_id + all member rows       │
+│    SQL query: card_token → group_id + initiating member     │
+│    + all other group member rows.                           │
 │    Also fetches each member's asset account ID and          │
 │    the group's clearing account ID. Single round-trip.      │
 │                                                             │
 │  Step 2: insertPendingTransaction()                         │
 │    Writes a PENDING transaction row immediately.            │
+│    Tags the initiating member's token ID on the txn.        │
 │    The UNIQUE(idempotency_key) constraint is a DB backstop. │
 │                                                             │
 │  Step 3: parallelBalanceCheck()                             │
@@ -201,6 +207,11 @@ Card Processor
 │      • N funding_pulls   (one per member)                   │
 │      • Updates transaction.status → APPROVED               │
 │    Single atomic commit. If it fails, nothing is written.   │
+│                                                             │
+│  Step 6: Fund & Reimburse                                   │
+│    Highnote pulls from the Product Funding Account to pay   │
+│    the merchant. Backend simultaneously triggers individual │
+│    pulls from each member to reimburse that account.        │
 └─────────────────────────────────────────────────────────────┘
      │
      ▼

@@ -135,12 +135,13 @@ Leaders appear first; remaining members are sorted by name.
 
 ---
 
-## 5. Issue a Virtual Card
+## 5. Issue Virtual Card Tokens
 
-The card is issued to a specific member (typically the leader). The returned `card_token` is used to authorize purchases.
+Each member receives their own unique virtual card token (Proxy Model). All tokens map to the same group — any member can initiate a purchase on behalf of the circle.
 
 ```bash
-CARD=$(curl -s -X POST $BASE/v1/cards/issue \
+# Issue token for Alice (leader)
+ALICE_CARD=$(curl -s -X POST $BASE/v1/cards/issue \
   -H "Content-Type: application/json" \
   -d "{
     \"member_id\": \"$ALICE_ID\",
@@ -149,11 +150,23 @@ CARD=$(curl -s -X POST $BASE/v1/cards/issue \
     \"email\": \"alice@example.com\"
   }" | jq .)
 
-echo $CARD
-CARD_TOKEN=$(echo $CARD | jq -r '.card_token')
+echo $ALICE_CARD
+ALICE_TOKEN=$(echo $ALICE_CARD | jq -r '.card_token')
+
+# Issue token for Bob
+BOB_CARD=$(curl -s -X POST $BASE/v1/cards/issue \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"member_id\": \"$BOB_ID\",
+    \"first_name\": \"Bob\",
+    \"last_name\": \"Johnson\",
+    \"email\": \"bob@example.com\"
+  }" | jq .)
+
+BOB_TOKEN=$(echo $BOB_CARD | jq -r '.card_token')
 ```
 
-Expected (201 Created):
+Expected per token (201 Created):
 
 ```json
 {
@@ -163,7 +176,7 @@ Expected (201 Created):
 }
 ```
 
-After issuing, `has_card: true` will appear in `GET /v1/groups/:id`.
+After issuing, `has_card: true` will appear for each member in `GET /v1/groups/:id`. Each token is unique but maps to the same group — the backend resolves `card_token → group_id` on every authorization request.
 
 ---
 
@@ -208,12 +221,12 @@ sign_body() {
 
 ### Scenario A — Tally Wallet Covers Full Amount (Tier 1)
 
-Both Alice and Bob have $50 loaded. A $40 purchase splits to $10/member — covered entirely by Tally balances.
+Both Alice and Bob have $50 loaded. Alice taps her personal token at a restaurant. A $40 purchase splits to $10/member — covered entirely by Tally balances.
 
 ```bash
 BODY='{
   "idempotency_key": "txn-001",
-  "card_token": "'"$CARD_TOKEN"'",
+  "card_token": "'"$ALICE_TOKEN"'",
   "amount_cents": 4000,
   "currency": "USD",
   "merchant_name": "The Steakhouse",
@@ -242,7 +255,7 @@ Expected (200 OK):
 
 ### Scenario B — Direct Pull Fallback (Tier 2)
 
-Members have $0 Tally balance, but Alice has a linked Plaid account. The mock Plaid client returns a non-zero balance, exercising the direct pull path.
+Members have $0 Tally balance, but Alice has a linked Plaid account. Bob taps his personal token at a store — the backend resolves his token to the group and checks all members. The mock Plaid client returns a non-zero balance, exercising the direct pull path.
 
 ```bash
 # Confirm no wallet balance by checking group state
@@ -250,7 +263,7 @@ curl -s $BASE/v1/groups/$GROUP_ID | jq '.members[].tally_balance_cents'
 
 BODY='{
   "idempotency_key": "txn-002",
-  "card_token": "'"$CARD_TOKEN"'",
+  "card_token": "'"$BOB_TOKEN"'",
   "amount_cents": 2000,
   "currency": "USD",
   "merchant_name": "Walgreens",
@@ -299,12 +312,12 @@ Expected (401 Unauthorized):
 
 ### Scenario E — Decline (No Funds)
 
-Use a card token that has no members with any balance and no Plaid accounts configured.
+Use a member token where the group has no balance and no Plaid accounts configured. The backend resolves the token to the group and declines when nobody can cover their share.
 
 ```bash
 BODY='{
   "idempotency_key": "txn-decline",
-  "card_token": "'"$CARD_TOKEN"'",
+  "card_token": "'"$ALICE_TOKEN"'",
   "amount_cents": 99999999,
   "currency": "USD"
 }'
@@ -331,9 +344,9 @@ Expected:
 
 ---
 
-## 8. Highnote Webhook Authorization
+## 8. Highnote Webhook Authorization (Collaborative Authorization)
 
-The Highnote webhook uses the `HIGHNOTE_WEBHOOK_SECRET` for HMAC signing and expects a Highnote-specific payload format.
+The Highnote webhook is the real-world entry point for the Proxy Model. When a member taps their token, Highnote sends an `AUTHORIZATION_REQUEST` with the member's unique `cardId` (token). The backend resolves the token to the group and runs the collaborative authorization flow.
 
 ```bash
 HN_SECRET="3ac94708bea182cb1bc6503fccff3347"  # matches .env default
@@ -343,11 +356,12 @@ sign_hn() {
   echo -n "$body" | openssl dgst -sha256 -hmac "$HN_SECRET" | awk '{print "sha256="$2}'
 }
 
+# Simulate Alice tapping her personal token at MGM Grand
 HN_BODY='{
   "id": "evt-hn-001",
   "type": "AUTHORIZATION_REQUEST",
   "authorizationRequestId": "hn-auth-req-001",
-  "cardId": "'"$CARD_TOKEN"'",
+  "cardId": "'"$ALICE_TOKEN"'",
   "transactionAmount": {
     "value": 3500,
     "currencyCode": "USD"
@@ -413,7 +427,7 @@ Expected (200 OK):
 
 ## 10. Full Happy-Path Flow (End-to-End)
 
-Run this sequence in order to exercise every layer of the system:
+Run this sequence in order to exercise every layer of the system, including the Proxy Card Model where each member gets their own token:
 
 ```bash
 # 1. Verify health
@@ -445,8 +459,8 @@ curl -s -X POST $BASE/v1/wallets/load \
   -H "Content-Type: application/json" \
   -d "{\"member_id\": \"$MEMBER_ID\", \"amount_cents\": 10000}" | jq .
 
-# 6. Issue card
-CARD_TOKEN=$(curl -s -X POST $BASE/v1/cards/issue \
+# 6. Issue card tokens to BOTH members (Proxy Model)
+LEADER_TOKEN=$(curl -s -X POST $BASE/v1/cards/issue \
   -H "Content-Type: application/json" \
   -d "{
     \"member_id\": \"$LEADER_ID\",
@@ -455,10 +469,19 @@ CARD_TOKEN=$(curl -s -X POST $BASE/v1/cards/issue \
     \"email\": \"leader@example.com\"
   }" | jq -r '.card_token')
 
-# 7. Authorize a purchase
+MEMBER_TOKEN=$(curl -s -X POST $BASE/v1/cards/issue \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"member_id\": \"$MEMBER_ID\",
+    \"first_name\": \"Test\",
+    \"last_name\": \"Member\",
+    \"email\": \"member@example.com\"
+  }" | jq -r '.card_token')
+
+# 7. Authorize a purchase (Member taps THEIR token — not the leader's)
 BODY="{
   \"idempotency_key\": \"e2e-$(date +%s)\",
-  \"card_token\": \"$CARD_TOKEN\",
+  \"card_token\": \"$MEMBER_TOKEN\",
   \"amount_cents\": 8000,
   \"currency\": \"USD\",
   \"merchant_name\": \"E2E Merchant\"
@@ -475,8 +498,8 @@ curl -s -X POST $BASE/v1/auth/jit \
 # 8. Verify transaction appears
 curl -s $BASE/v1/groups/$GROUP_ID/transactions | jq '.transactions[0]'
 
-# 9. Verify wallet balances decremented
-curl -s $BASE/v1/groups/$GROUP_ID | jq '.members[].tally_balance_cents'
+# 9. Verify wallet balances decremented for BOTH members
+curl -s $BASE/v1/groups/$GROUP_ID | jq '.members[] | {display_name, tally_balance_cents, has_card}'
 ```
 
 ---
