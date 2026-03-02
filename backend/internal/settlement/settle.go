@@ -32,7 +32,10 @@ import (
 	"github.com/tally/backend/internal/stripepayment"
 )
 
-const leaderAuthWindow = 24 * time.Hour
+const (
+	leaderAuthWindow  = 24 * time.Hour
+	settlementTimeout = 5 * time.Minute
+)
 
 // memberFunding holds the data needed to settle one member's share.
 type memberFunding struct {
@@ -309,6 +312,10 @@ func StartSettlementWorker(ctx context.Context, db *sql.DB, stripe stripepayment
 	}()
 }
 
+// sweepConcurrency limits the number of settlement goroutines spawned per sweep
+// cycle to prevent goroutine proliferation under a large backlog.
+const sweepConcurrency = 10
+
 // sweepApproved finds APPROVED transactions that haven't been settled and
 // processes them. This handles crashes or missed goroutines.
 func sweepApproved(ctx context.Context, db *sql.DB, stripe stripepayment.PaymentClient) {
@@ -324,13 +331,20 @@ func sweepApproved(ctx context.Context, db *sql.DB, stripe stripepayment.Payment
 	}
 	defer rows.Close()
 
+	// Semaphore: at most sweepConcurrency goroutines run in parallel.
+	sem := make(chan struct{}, sweepConcurrency)
+
 	for rows.Next() {
 		var txnID uuid.UUID
 		if err := rows.Scan(&txnID); err != nil {
 			continue
 		}
+		sem <- struct{}{} // acquire slot
 		go func(id uuid.UUID) {
-			if err := SettleApprovedTransaction(ctx, db, stripe, id); err != nil {
+			defer func() { <-sem }() // release slot
+			settleCtx, cancel := context.WithTimeout(context.Background(), settlementTimeout)
+			defer cancel()
+			if err := SettleApprovedTransaction(settleCtx, db, stripe, id); err != nil {
 				slog.Error("sweep settlement failed", "transaction_id", id, "error", err)
 			}
 		}(txnID)

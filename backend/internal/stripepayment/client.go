@@ -10,6 +10,7 @@ import (
 
 	"github.com/stripe/stripe-go/v82"
 	"github.com/stripe/stripe-go/v82/paymentintent"
+	"github.com/stripe/stripe-go/v82/paymentmethod"
 	"github.com/stripe/stripe-go/v82/setupintent"
 )
 
@@ -24,24 +25,31 @@ type PaymentClient interface {
 	// is passed as the Stripe idempotency key header to prevent double charges
 	// on retries.
 	ChargePaymentMethod(ctx context.Context, pmID string, amountCents int64, currency, idempotencyKey string) (chargeID string, err error)
+
+	// RetrievePaymentMethod verifies that a PaymentMethod exists in Stripe.
+	// Returns an error if the PM is not found or otherwise invalid.
+	RetrievePaymentMethod(ctx context.Context, pmID string) error
 }
 
 // ── Real client ───────────────────────────────────────────────────────────────
 
-type realClient struct {
-	secretKey string
-}
+// realClient has no fields — stripe.Key is set once at startup in NewRealClient.
+type realClient struct{}
 
 // NewRealClient returns a PaymentClient backed by the live Stripe API.
+// stripe.Key is set once here; removing per-request global writes eliminates
+// the data race that occurs when multiple goroutines call stripe.Key = key.
 func NewRealClient(secretKey string) PaymentClient {
-	return &realClient{secretKey: secretKey}
+	stripe.Key = secretKey
+	return &realClient{}
 }
 
 func (c *realClient) CreateSetupIntent(ctx context.Context, customerID string) (string, error) {
-	stripe.Key = c.secretKey
-
 	params := &stripe.SetupIntentParams{
-		PaymentMethodTypes: []*string{stripe.String("us_bank_account")},
+		// card + off_session: supports debit/credit cards and allows the PM to
+		// be charged without the cardholder present (required for settlement).
+		PaymentMethodTypes: []*string{stripe.String("card")},
+		Usage:              stripe.String("off_session"),
 	}
 	if customerID != "" {
 		params.Customer = stripe.String(customerID)
@@ -56,8 +64,6 @@ func (c *realClient) CreateSetupIntent(ctx context.Context, customerID string) (
 }
 
 func (c *realClient) ChargePaymentMethod(ctx context.Context, pmID string, amountCents int64, currency, idempotencyKey string) (string, error) {
-	stripe.Key = c.secretKey
-
 	params := &stripe.PaymentIntentParams{
 		Amount:        stripe.Int64(amountCents),
 		Currency:      stripe.String(currency),
@@ -74,6 +80,15 @@ func (c *realClient) ChargePaymentMethod(ctx context.Context, pmID string, amoun
 		return "", fmt.Errorf("stripe ChargePaymentMethod: %w", err)
 	}
 	return pi.ID, nil
+}
+
+func (c *realClient) RetrievePaymentMethod(ctx context.Context, pmID string) error {
+	params := &stripe.PaymentMethodParams{}
+	params.Context = ctx
+	if _, err := paymentmethod.Get(pmID, params); err != nil {
+		return fmt.Errorf("stripe RetrievePaymentMethod: %w", err)
+	}
+	return nil
 }
 
 // ── Mock client ───────────────────────────────────────────────────────────────
@@ -95,4 +110,8 @@ func (m *mockClient) CreateSetupIntent(_ context.Context, _ string) (string, err
 func (m *mockClient) ChargePaymentMethod(_ context.Context, pmID string, amountCents int64, _, _ string) (string, error) {
 	n := m.counter.Add(1)
 	return fmt.Sprintf("pi_mock_%s_%d_%d", pmID, amountCents, n), nil
+}
+
+func (m *mockClient) RetrievePaymentMethod(_ context.Context, _ string) error {
+	return nil
 }

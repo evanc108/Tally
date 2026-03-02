@@ -116,7 +116,7 @@ func main() {
 		// stripe.ConstructEvent() is called inside each handler.
 		stripeWebhooks := v1.Group("/webhooks/stripe")
 		stripeWebhooks.Use(middleware.RateLimit(rdb, 120, time.Minute))
-		stripeHandler := webhooks.NewStripeHandler(pool, paymentClient, cfg)
+		stripeHandler := webhooks.NewStripeHandler(pool, paymentClient, issuingClient, cfg)
 
 		// Wire the settlement goroutine into the issuing-authorization webhook.
 		stripeWebhooks.POST("/issuing-authorization", func(c *gin.Context) {
@@ -127,6 +127,7 @@ func main() {
 
 		// ── User-facing routes (Clerk JWT required) ───────────────────────────
 		api := v1.Group("")
+		api.Use(middleware.RateLimit(rdb, 60, time.Minute))
 		if cfg.ClerkJWKSURL != "" {
 			api.Use(middleware.ClerkAuth(cfg.ClerkJWKSURL))
 		} else {

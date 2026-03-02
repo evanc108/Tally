@@ -52,6 +52,9 @@ func (c *Config) Validate() {
 	if c.StripeWebhookSecret == "" {
 		panic("STRIPE_WEBHOOK_SECRET must be set in production — refusing to start without Stripe webhook secret")
 	}
+	if c.ClerkJWKSURL == "" {
+		panic("CLERK_JWKS_URL must be set in production — refusing to start without JWT authentication")
+	}
 }
 
 func getEnv(key, fallback string) string {

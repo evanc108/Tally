@@ -31,9 +31,13 @@ type meResponse struct {
 }
 
 func (h *Handler) Me(c *gin.Context) {
-	userID, _ := c.Get(middleware.ClerkUserIDKey)
-	id, _ := userID.(string)
-	if id == "" {
+	raw, ok := c.Get(middleware.ClerkUserIDKey)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
+		return
+	}
+	id, ok := raw.(string)
+	if !ok || id == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
 		return
 	}
@@ -61,8 +65,12 @@ type createSetupIntentResponse struct {
 }
 
 func (h *Handler) CreateSetupIntent(c *gin.Context) {
-	userID, _ := c.Get(middleware.ClerkUserIDKey)
-	id, _ := userID.(string)
+	raw, ok := c.Get(middleware.ClerkUserIDKey)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
+		return
+	}
+	id, _ := raw.(string)
 
 	clientSecret, err := h.payment.CreateSetupIntent(c.Request.Context(), id)
 	if err != nil {
@@ -86,8 +94,19 @@ func (h *Handler) ConfirmPaymentMethod(c *gin.Context) {
 		return
 	}
 
-	userID, _ := c.Get(middleware.ClerkUserIDKey)
-	id, _ := userID.(string)
+	raw, ok := c.Get(middleware.ClerkUserIDKey)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
+		return
+	}
+	id, _ := raw.(string)
+
+	// Verify the PaymentMethod exists in Stripe before persisting it.
+	if err := h.payment.RetrievePaymentMethod(c.Request.Context(), req.PaymentMethodID); err != nil {
+		slog.ErrorContext(c.Request.Context(), "RetrievePaymentMethod failed", "pm_id", req.PaymentMethodID, "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payment_method_id"})
+		return
+	}
 
 	res, err := h.db.ExecContext(c.Request.Context(), `
 		UPDATE members
@@ -109,8 +128,12 @@ func (h *Handler) ConfirmPaymentMethod(c *gin.Context) {
 }
 
 func (h *Handler) CreateBackupSetupIntent(c *gin.Context) {
-	userID, _ := c.Get(middleware.ClerkUserIDKey)
-	id, _ := userID.(string)
+	raw, ok := c.Get(middleware.ClerkUserIDKey)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
+		return
+	}
+	id, _ := raw.(string)
 
 	clientSecret, err := h.payment.CreateSetupIntent(c.Request.Context(), id)
 	if err != nil {
@@ -134,8 +157,19 @@ func (h *Handler) ConfirmBackupPaymentMethod(c *gin.Context) {
 		return
 	}
 
-	userID, _ := c.Get(middleware.ClerkUserIDKey)
-	id, _ := userID.(string)
+	raw, ok := c.Get(middleware.ClerkUserIDKey)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
+		return
+	}
+	id, _ := raw.(string)
+
+	// Verify the PaymentMethod exists in Stripe before persisting it.
+	if err := h.payment.RetrievePaymentMethod(c.Request.Context(), req.PaymentMethodID); err != nil {
+		slog.ErrorContext(c.Request.Context(), "RetrievePaymentMethod failed (backup)", "pm_id", req.PaymentMethodID, "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payment_method_id"})
+		return
+	}
 
 	res, err := h.db.ExecContext(c.Request.Context(), `
 		UPDATE members

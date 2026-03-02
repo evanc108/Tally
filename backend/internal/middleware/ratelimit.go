@@ -30,10 +30,9 @@ func RateLimit(rdb *redis.Client, maxRequests int, window time.Duration) gin.Han
 			return
 		}
 
-		// Set expiry only on the first request in a new window.
-		if count == 1 {
-			rdb.Expire(ctx, key, window) //nolint:errcheck
-		}
+		// Set expiry on every request so keys always have a TTL even if Redis
+		// restarted between the INCR and the previous EXPIRE call.
+		rdb.Expire(ctx, key, window) //nolint:errcheck
 
 		if count > int64(maxRequests) {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
