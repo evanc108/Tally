@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		3D651F9B2F553D48008C00BC /* ClerkKit in Frameworks */ = {isa = PBXBuildFile; productRef = 60480FA02F54CB2200E35834 /* ClerkKit */; };
+		3D651F9C2F553D48008C00BC /* ClerkKitUI in Frameworks */ = {isa = PBXBuildFile; productRef = 60480FA12F54CB2200E35834 /* ClerkKitUI */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		60480F402F54CB2200E35834 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +32,7 @@
 		60480F322F54CB2100E35834 /* Tally.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tally.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		60480F3F2F54CB2200E35834 /* TallyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TallyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		60480F492F54CB2200E35834 /* TallyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TallyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		60480FB02F54CB2200E35834 /* Tally/Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Tally/Secrets.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -52,6 +58,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3D651F9C2F553D48008C00BC /* ClerkKitUI in Frameworks */,
+				3D651F9B2F553D48008C00BC /* ClerkKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -72,6 +80,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		3D65203E2F553EBA008C00BC /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				60480FB02F54CB2200E35834 /* Tally/Secrets.xcconfig */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		60480F292F54CB2100E35834 = {
 			isa = PBXGroup;
 			children = (
@@ -79,6 +95,7 @@
 				60480F422F54CB2200E35834 /* TallyTests */,
 				60480F4C2F54CB2200E35834 /* TallyUITests */,
 				60480F332F54CB2100E35834 /* Products */,
+				3D65203E2F553EBA008C00BC /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -112,6 +129,8 @@
 			);
 			name = Tally;
 			packageProductDependencies = (
+				60480FA02F54CB2200E35834 /* ClerkKit */,
+				60480FA12F54CB2200E35834 /* ClerkKitUI */,
 			);
 			productName = Tally;
 			productReference = 60480F322F54CB2100E35834 /* Tally.app */;
@@ -195,6 +214,9 @@
 			);
 			mainGroup = 60480F292F54CB2100E35834;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				60480FA22F54CB2200E35834 /* XCRemoteSwiftPackageReference "clerk-ios" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 60480F332F54CB2100E35834 /* Products */;
 			projectDirPath = "";
@@ -392,6 +414,7 @@
 		};
 		60480F542F54CB2200E35834 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 60480FB02F54CB2200E35834 /* Tally/Secrets.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -400,11 +423,13 @@
 				DEVELOPMENT_TEAM = QUZZXJC2AK;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -424,6 +449,7 @@
 		};
 		60480F552F54CB2200E35834 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 60480FB02F54CB2200E35834 /* Tally/Secrets.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -432,11 +458,13 @@
 				DEVELOPMENT_TEAM = QUZZXJC2AK;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -578,6 +606,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		60480FA22F54CB2200E35834 /* XCRemoteSwiftPackageReference "clerk-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/clerk/clerk-ios";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		60480FA02F54CB2200E35834 /* ClerkKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 60480FA22F54CB2200E35834 /* XCRemoteSwiftPackageReference "clerk-ios" */;
+			productName = ClerkKit;
+		};
+		60480FA12F54CB2200E35834 /* ClerkKitUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 60480FA22F54CB2200E35834 /* XCRemoteSwiftPackageReference "clerk-ios" */;
+			productName = ClerkKitUI;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 60480F2A2F54CB2100E35834 /* Project object */;
 }
