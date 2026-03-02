@@ -19,6 +19,9 @@ type Config struct {
 	HighnoteWebhookSecret  string // shared secret for verifying Highnote webhook signatures
 	// Clerk — leave empty to disable JWT auth (local development only).
 	ClerkJWKSURL string // e.g. https://<clerk-domain>/.well-known/jwks.json
+	// DevUserID is injected as the authenticated user when CLERK_JWKS_URL is
+	// unset. Never used in production (Validate() blocks that path).
+	DevUserID string
 }
 
 func Load() *Config {
@@ -35,6 +38,7 @@ func Load() *Config {
 		HighnoteCardProductID:  getEnv("HIGHNOTE_CARD_PRODUCT_ID", "dev_card_product"),
 		HighnoteWebhookSecret:  getEnv("HIGHNOTE_WEBHOOK_SECRET", "dev_hn_webhook_secret"),
 		ClerkJWKSURL:           getEnv("CLERK_JWKS_URL", ""),
+		DevUserID:              getEnv("DEV_USER_ID", "dev-user-local"),
 	}
 }
 

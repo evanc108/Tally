@@ -68,3 +68,44 @@ func (c *MockClient) GetAccountBalance(ctx context.Context, accessToken, account
 	// Default: random balance $0–$5,000 for unseen accounts.
 	return int64(rand.Intn(500_001)), nil
 }
+
+// ── Link flow mock methods ─────────────────────────────────────────────────────
+
+// CreateLinkToken returns a deterministic mock link token for the given user.
+func (c *MockClient) CreateLinkToken(_ context.Context, userID string) (string, error) {
+	return "link-sandbox-mock-" + userID, nil
+}
+
+// ExchangePublicToken converts a mock public token into a mock access token and
+// item ID. The tokens are deterministic so tests can predict them.
+func (c *MockClient) ExchangePublicToken(_ context.Context, publicToken string) (string, string, error) {
+	select {
+	case <-time.After(20 * time.Millisecond):
+	}
+	return "access-sandbox-mock-" + publicToken, "item-mock-" + publicToken, nil
+}
+
+// GetAccounts returns two fixed mock accounts (checking + savings).
+func (c *MockClient) GetAccounts(_ context.Context, accessToken string) ([]LinkedAccount, error) {
+	select {
+	case <-time.After(20 * time.Millisecond):
+	}
+	return []LinkedAccount{
+		{
+			AccountID:    accessToken + "-checking",
+			Name:         "Mock Checking",
+			Mask:         "0001",
+			Type:         "depository",
+			Subtype:      "checking",
+			BalanceCents: 250_000,
+		},
+		{
+			AccountID:    accessToken + "-savings",
+			Name:         "Mock Savings",
+			Mask:         "0002",
+			Type:         "depository",
+			Subtype:      "savings",
+			BalanceCents: 500_000,
+		},
+	}, nil
+}

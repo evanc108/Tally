@@ -23,8 +23,9 @@ func NewHandler(db *sql.DB) *Handler {
 // ── POST /v1/groups ───────────────────────────────────────────────────────────
 
 type createGroupRequest struct {
-	Name     string `json:"name"     binding:"required"`
-	Currency string `json:"currency"`
+	Name        string `json:"name"         binding:"required"`
+	Currency    string `json:"currency"`
+	DisplayName string `json:"display_name" binding:"required"`
 }
 
 type createGroupResponse struct {
@@ -32,6 +33,7 @@ type createGroupResponse struct {
 	Name      string `json:"name"`
 	Currency  string `json:"currency"`
 	CreatedAt string `json:"created_at"`
+	MemberID  string `json:"member_id"`
 }
 
 // CreateGroup creates a new tally group and its clearing (liability) ledger account.
@@ -47,6 +49,13 @@ type createGroupResponse struct {
 // @Failure      500  {object} map[string]string
 // @Router       /v1/groups [post]
 func (h *Handler) CreateGroup(c *gin.Context) {
+	clerkUserID, ok := c.Get("clerk_user_id")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	userID, _ := clerkUserID.(string)
+
 	var req createGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -59,7 +68,9 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 	}
 
 	groupID := uuid.New()
-	accountID := uuid.New()
+	groupAccountID := uuid.New()
+	memberID := uuid.New()
+	memberAccountID := uuid.New()
 
 	tx, err := h.db.BeginTx(c.Request.Context(), nil)
 	if err != nil {
@@ -80,9 +91,29 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 
 	if _, err := tx.ExecContext(c.Request.Context(),
 		`INSERT INTO accounts (id, owner_id, owner_type, account_type, currency) VALUES ($1, $2, 'group', 'liability', $3)`,
-		accountID, groupID, currency,
+		groupAccountID, groupID, currency,
 	); err != nil {
 		slog.ErrorContext(c.Request.Context(), "create group account failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+		return
+	}
+
+	// Add the creator as the first member and leader.
+	if _, err := tx.ExecContext(c.Request.Context(), `
+		INSERT INTO members (id, group_id, user_id, display_name, split_weight, is_leader)
+		VALUES ($1, $2, $3, $4, 1.0, true)`,
+		memberID, groupID, userID, req.DisplayName,
+	); err != nil {
+		slog.ErrorContext(c.Request.Context(), "create creator member failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+		return
+	}
+
+	if _, err := tx.ExecContext(c.Request.Context(),
+		`INSERT INTO accounts (id, owner_id, owner_type, account_type) VALUES ($1, $2, 'member', 'asset')`,
+		memberAccountID, memberID,
+	); err != nil {
+		slog.ErrorContext(c.Request.Context(), "create creator account failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
 		return
 	}
@@ -92,12 +123,13 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 		return
 	}
 
-	slog.InfoContext(c.Request.Context(), "group created", "group_id", groupID)
+	slog.InfoContext(c.Request.Context(), "group created", "group_id", groupID, "creator_member_id", memberID)
 	c.JSON(http.StatusCreated, createGroupResponse{
 		GroupID:   groupID.String(),
 		Name:      req.Name,
 		Currency:  currency,
 		CreatedAt: createdAt.UTC().Format(time.RFC3339),
+		MemberID:  memberID.String(),
 	})
 }
 
@@ -105,6 +137,7 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 
 type addMemberRequest struct {
 	DisplayName      string  `json:"display_name"        binding:"required"`
+	UserID           string  `json:"user_id"`           // optional: defaults to caller's user ID
 	PlaidAccessToken string  `json:"plaid_access_token"`
 	PlaidAccountID   string  `json:"plaid_account_id"`
 	SplitWeight      float64 `json:"split_weight"`
@@ -151,19 +184,24 @@ func (h *Handler) AddMember(c *gin.Context) {
 		req.SplitWeight = 0.25
 	}
 
-	// Verify group exists.
-	var exists bool
-	if err := h.db.QueryRowContext(c.Request.Context(),
-		`SELECT EXISTS(SELECT 1 FROM tally_groups WHERE id = $1)`, groupID,
-	).Scan(&exists); err != nil || !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "group not found"})
+	// Use the provided user_id if given (leader adding someone else), otherwise
+	// default to the caller's own identity (self-join).
+	userID := req.UserID
+	if userID == "" {
+		callerID, _ := c.Get("clerk_user_id")
+		userID, _ = callerID.(string)
+	}
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
 		return
 	}
 
-	clerkUserID, _ := c.Get("clerk_user_id")
-	userID, _ := clerkUserID.(string)
-	if userID == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
+	// Ensure the user exists in the users table (upsert so leaders can add
+	// members who haven't called /users/me yet).
+	if _, err := h.db.ExecContext(c.Request.Context(),
+		`INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, userID,
+	); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
 		return
 	}
 
@@ -213,6 +251,61 @@ func (h *Handler) AddMember(c *gin.Context) {
 		DisplayName: req.DisplayName,
 		SplitWeight: req.SplitWeight,
 	})
+}
+
+// ── GET /v1/groups ────────────────────────────────────────────────────────────
+
+type groupSummary struct {
+	GroupID   string `json:"group_id"`
+	Name      string `json:"name"`
+	Currency  string `json:"currency"`
+	CreatedAt string `json:"created_at"`
+}
+
+// ListGroups returns all groups the authenticated user belongs to.
+//
+// @Summary      List groups
+// @Description  Returns all groups the authenticated user is a member of, newest first.
+// @Tags         groups
+// @Produce      json
+// @Success      200 {object} map[string][]groupSummary
+// @Failure      401 {object} map[string]string
+// @Failure      500 {object} map[string]string
+// @Router       /v1/groups [get]
+func (h *Handler) ListGroups(c *gin.Context) {
+	clerkUserID, ok := c.Get("clerk_user_id")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	rows, err := h.db.QueryContext(c.Request.Context(), `
+		SELECT g.id, g.name, g.currency, g.created_at
+		FROM tally_groups g
+		JOIN members m ON m.group_id = g.id
+		WHERE m.user_id = $1
+		ORDER BY g.created_at DESC`,
+		clerkUserID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+	defer rows.Close()
+
+	result := []groupSummary{}
+	for rows.Next() {
+		var g groupSummary
+		var createdAt time.Time
+		if err := rows.Scan(&g.GroupID, &g.Name, &g.Currency, &createdAt); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "scan failed"})
+			return
+		}
+		g.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		result = append(result, g)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"groups": result})
 }
 
 // ── GET /v1/groups/:id ────────────────────────────────────────────────────────

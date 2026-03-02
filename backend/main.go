@@ -26,7 +26,7 @@ import (
 	"github.com/tally/backend/internal/groups"
 	"github.com/tally/backend/internal/highnote"
 	"github.com/tally/backend/internal/middleware"
-	"github.com/tally/backend/internal/plaid"
+	plaidpkg "github.com/tally/backend/internal/plaid"
 	"github.com/tally/backend/internal/users"
 )
 
@@ -76,12 +76,12 @@ func main() {
 		slog.Info("highnote mock client active")
 	}
 
-	var plaidClient plaid.BalanceClient
+	var plaidClient plaidpkg.Client
 	if cfg.PlaidClientID != "" {
-		plaidClient = plaid.NewRealClient(cfg.PlaidClientID, cfg.PlaidSecret, cfg.PlaidEnv)
+		plaidClient = plaidpkg.NewRealClient(cfg.PlaidClientID, cfg.PlaidSecret, cfg.PlaidEnv)
 		slog.Info("plaid real client active", "env", cfg.PlaidEnv)
 	} else {
-		plaidClient = plaid.NewMockClient()
+		plaidClient = plaidpkg.NewMockClient()
 		slog.Info("plaid mock client active")
 	}
 
@@ -122,17 +122,29 @@ func main() {
 		if cfg.ClerkJWKSURL != "" {
 			api.Use(middleware.ClerkAuth(cfg.ClerkJWKSURL))
 		} else {
-			slog.Warn("CLERK_JWKS_URL not set — JWT auth disabled (development mode only)")
+			slog.Warn("CLERK_JWKS_URL not set — using dev auth bypass (set DEV_USER_ID in .env)")
+			api.Use(middleware.DevAuth(cfg.DevUserID))
 		}
 
 		userHandler := users.NewHandler(pool)
 		api.POST("/users/me", userHandler.Me)
 
 		groupHandler := groups.NewHandler(pool)
-		api.POST("/groups",                 groupHandler.CreateGroup)
-		api.POST("/groups/:id/members",     groupHandler.AddMember)
-		api.GET("/groups/:id",              groupHandler.GetGroup)
-		api.GET("/groups/:id/transactions", groupHandler.ListTransactions)
+		api.POST("/groups",     groupHandler.CreateGroup)
+		api.GET("/groups",      groupHandler.ListGroups)
+
+		// Routes that require the caller to be a member of the group.
+		groupMember := api.Group("/groups/:id")
+		groupMember.Use(middleware.RequireGroupMember(pool))
+		groupMember.GET("",              groupHandler.GetGroup)
+		groupMember.GET("/transactions", groupHandler.ListTransactions)
+		groupMember.POST("/members",     groupHandler.AddMember)
+
+		plaidHandler := plaidpkg.NewHandler(pool, plaidClient)
+		api.POST("/plaid/link-token",     plaidHandler.CreateLinkToken)
+		api.POST("/plaid/exchange-token", plaidHandler.ExchangeToken)
+		api.GET("/plaid/accounts",        plaidHandler.ListAccounts)
+		api.DELETE("/plaid/accounts",     plaidHandler.UnlinkAccount)
 
 		api.POST("/cards/issue",  cardHandler.IssueCard)
 		api.POST("/wallets/load", cardHandler.LoadWallet)
