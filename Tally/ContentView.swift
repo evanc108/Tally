@@ -8,31 +8,180 @@
 import SwiftUI
 import ClerkKit
 
+// MARK: - Tab Definition
+
+enum TallyTab: Int, CaseIterable {
+    case home, circles, pay, wallet, profile
+
+    var title: String {
+        switch self {
+        case .home: "Home"
+        case .circles: "Circles"
+        case .pay: "Pay"
+        case .wallet: "Wallet"
+        case .profile: "Profile"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .home: "house.fill"
+        case .circles: "person.3.fill"
+        case .pay: "dollarsign"
+        case .wallet: "wallet.bifold.fill"
+        case .profile: "person.fill"
+        }
+    }
+}
+
+// MARK: - Root View
+
 struct ContentView: View {
     @Environment(Clerk.self) private var clerk
+    @State private var selectedTab: TallyTab = .home
+
+    init() {
+        // Hide the system tab bar globally
+        UITabBar.appearance().isHidden = true
+
+        // Nav bar: opaque with shadow, not floating/translucent
+        let navAppearance = UINavigationBarAppearance()
+        navAppearance.configureWithOpaqueBackground()
+        navAppearance.backgroundColor = UIColor(TallyColors.bgPrimary)
+        navAppearance.shadowColor = .clear
+        UINavigationBar.appearance().standardAppearance = navAppearance
+        UINavigationBar.appearance().scrollEdgeAppearance = navAppearance
+    }
 
     var body: some View {
-        TabView {
-            Tab("Home", systemImage: "house.fill") {
-                HomeTab()
+        ZStack(alignment: .bottom) {
+            // Tab content
+            Group {
+                switch selectedTab {
+                case .home:
+                    HomeTab()
+                case .circles:
+                    CirclesTab()
+                case .pay:
+                    PayTab()
+                case .wallet:
+                    WalletTab()
+                case .profile:
+                    ProfileTab()
+                }
             }
-            Tab("Wallet", systemImage: "wallet.bifold.fill") {
-                WalletTab()
-            }
-            Tab("Card", systemImage: "creditcard.fill") {
-                CardTab()
-            }
-            Tab("You", systemImage: "person.fill") {
-                ProfileTab()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Custom tab bar
+            TallyTabBar(selectedTab: $selectedTab)
+        }
+        .ignoresSafeArea(.keyboard)
+    }
+}
+
+// MARK: - Custom Tab Bar
+
+private struct TallyTabBar: View {
+    @Binding var selectedTab: TallyTab
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(TallyTab.allCases, id: \.rawValue) { tab in
+                if tab == .pay {
+                    // Raised center button
+                    PayButton(isSelected: selectedTab == .pay) {
+                        selectedTab = .pay
+                    }
+                } else {
+                    TabBarItem(tab: tab, isSelected: selectedTab == tab) {
+                        selectedTab = tab
+                    }
+                }
             }
         }
-        .tint(TallyColors.accent)
+        .padding(.horizontal, TallySpacing.sm)
+        .padding(.top, TallySpacing.sm)
+        .padding(.bottom, TallySpacing.xs)
+        .background(
+            TallyColors.bgPrimary
+                .shadow(.drop(color: .black.opacity(0.08), radius: 8, y: -2))
+        )
+    }
+}
+
+private struct TabBarItem: View {
+    let tab: TallyTab
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: TallySpacing.xs) {
+                Image(systemName: tab.icon)
+                    .font(.system(size: 20))
+                Text(tab.title)
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(isSelected ? TallyColors.accent : TallyColors.textSecondary)
+            .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+private struct PayButton: View {
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: TallySpacing.xs) {
+                ZStack {
+                    Circle()
+                        .fill(TallyColors.accent)
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "dollarsign")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .offset(y: -12)
+                Text("Pay")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(isSelected ? TallyColors.accent : TallyColors.textSecondary)
+                    .offset(y: -12)
+            }
+            .frame(maxWidth: .infinity)
+        }
     }
 }
 
 // MARK: - Home Tab
 
 private struct HomeTab: View {
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: TallySpacing.lg) {
+                Spacer()
+                Image(systemName: "house.fill")
+                    .font(.system(size: 48))
+                    .foregroundStyle(TallyColors.textSecondary)
+                Text("Home")
+                    .font(TallyFont.title)
+                    .foregroundStyle(TallyColors.textPrimary)
+                Text("Your activity feed will appear here.")
+                    .font(TallyFont.body)
+                    .foregroundStyle(TallyColors.textSecondary)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(TallyColors.bgPrimary)
+            .navigationTitle("Home")
+        }
+    }
+}
+
+// MARK: - Circles Tab
+
+private struct CirclesTab: View {
     @State private var showCreateFlow = false
     @State private var circles: [TallyCircle] = []
 
@@ -84,6 +233,33 @@ private struct HomeTab: View {
     }
 }
 
+// MARK: - Pay Tab
+
+private struct PayTab: View {
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: TallySpacing.lg) {
+                Spacer()
+                Image(systemName: "dollarsign.circle")
+                    .font(.system(size: 48))
+                    .foregroundStyle(TallyColors.textSecondary)
+                Text("Pay & Request")
+                    .font(TallyFont.title)
+                    .foregroundStyle(TallyColors.textPrimary)
+                Text("Send money or request payments from friends.")
+                    .font(TallyFont.body)
+                    .foregroundStyle(TallyColors.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, TallySpacing.xxl)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(TallyColors.bgPrimary)
+            .navigationTitle("Pay")
+        }
+    }
+}
+
 // MARK: - Wallet Tab
 
 private struct WalletTab: View {
@@ -109,31 +285,6 @@ private struct WalletTab: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(TallyColors.bgPrimary)
             .navigationTitle("Wallet")
-        }
-    }
-}
-
-// MARK: - Card Tab
-
-private struct CardTab: View {
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: TallySpacing.lg) {
-                Spacer()
-                Image(systemName: "creditcard")
-                    .font(.system(size: 48))
-                    .foregroundStyle(TallyColors.textSecondary)
-                Text("No cards yet")
-                    .font(TallyFont.title)
-                    .foregroundStyle(TallyColors.textPrimary)
-                Text("Join a circle to get a card.")
-                    .font(TallyFont.body)
-                    .foregroundStyle(TallyColors.textSecondary)
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(TallyColors.bgPrimary)
-            .navigationTitle("Card")
         }
     }
 }
@@ -205,7 +356,7 @@ private struct ProfileTab: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            .navigationTitle("You")
+            .navigationTitle("Profile")
         }
     }
 

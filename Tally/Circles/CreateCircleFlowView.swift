@@ -84,9 +84,6 @@ private struct CloseButton: View {
             Image(systemName: "xmark")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(TallyColors.textPrimary)
-                .frame(width: 32, height: 32)
-                .background(TallyColors.bgSecondary)
-                .clipShape(Circle())
         }
     }
 }
@@ -99,9 +96,6 @@ private struct BackChevron: View {
             Image(systemName: "chevron.left")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(TallyColors.textPrimary)
-                .frame(width: 32, height: 32)
-                .background(TallyColors.bgSecondary)
-                .clipShape(Circle())
         }
     }
 }
