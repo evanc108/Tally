@@ -2,531 +2,415 @@
 
 ## Prerequisites
 
-Start the stack before running any requests:
-
 ```bash
 cd backend
-docker-compose up
+
+# Configure environment (first time only)
+cp .env.example .env
+# Set WEBHOOK_SECRET to any string, e.g. "localtestingsecret"
+# Leave STRIPE_SECRET_KEY empty to use mock Stripe clients
+
+# Start the full stack
+docker compose up --build
 ```
 
 All endpoints are available at `http://localhost:8080`.
 
-Set a shell variable for convenience:
-
 ```bash
 BASE=http://localhost:8080
+
+# Optional: install jq for pretty JSON output
+# brew install jq
 ```
+
+With `CLERK_JWKS_URL` unset, all user-facing routes authenticate as `DEV_USER_ID` automatically — no token needed.
 
 ---
 
 ## 1. Health Check
 
-Verify the server is up and the database connection is healthy.
-
 ```bash
 curl -s $BASE/healthz | jq .
-```
-
-Expected:
-
-```json
-{ "status": "ok" }
+# → {"status":"ok"}
 ```
 
 ---
 
-## 2. Create a Group
+## 2. Create a User
+
+```bash
+USER=$(curl -s -X POST $BASE/v1/users/me \
+  -H "Content-Type: application/json" \
+  -d '{
+    "clerk_user_id": "dev-user-local",
+    "email": "test@example.com",
+    "first_name": "Test",
+    "last_name": "User"
+  }')
+
+echo $USER | jq .
+USER_ID=$(echo $USER | jq -r '.user_id')
+```
+
+---
+
+## 3. Create a Group
 
 ```bash
 GROUP=$(curl -s -X POST $BASE/v1/groups \
   -H "Content-Type: application/json" \
-  -d '{"name": "Trip to Vegas", "currency": "USD"}' | jq .)
+  -d '{"name": "trip-to-vegas", "display_name": "Trip to Vegas"}')
 
-echo $GROUP
+echo $GROUP | jq .
 GROUP_ID=$(echo $GROUP | jq -r '.group_id')
-```
 
-Expected (201 Created):
-
-```json
-{
-  "group_id": "<uuid>",
-  "name": "Trip to Vegas",
-  "currency": "USD",
-  "created_at": "2026-03-01T00:00:00Z"
-}
+# The creator is automatically added as the first member.
+# The creator member_id is returned in the response.
+CREATOR_MEMBER_ID=$(echo $GROUP | jq -r '.creator_member_id')
 ```
 
 ---
 
-## 3. Add Members
+## 4. Add More Members
 
-Add four members with equal 25% splits. The first member is the group leader.
+Add a second member with a complementary split weight. All weights in the group must sum to exactly `1.0`.
 
 ```bash
-# Leader
-ALICE=$(curl -s -X POST $BASE/v1/groups/$GROUP_ID/members \
+# Update creator split to 0.5 first — requires psql since there's no update endpoint yet
+docker compose exec postgres psql -U tally -d tally -c \
+  "UPDATE members SET split_weight = 0.5 WHERE id = '$CREATOR_MEMBER_ID';"
+
+# Add second member (another user would need their own user row in prod)
+MEMBER2=$(curl -s -X POST $BASE/v1/groups/$GROUP_ID/members \
   -H "Content-Type: application/json" \
-  -d '{
-    "display_name": "Alice",
-    "split_weight": 0.25,
-    "is_leader": true,
-    "plaid_access_token": "access-sandbox-alice",
-    "plaid_account_id": "alice-checking-001"
-  }' | jq .)
+  -d '{"display_name": "Friend", "split_weight": 0.5}')
 
-ALICE_ID=$(echo $ALICE | jq -r '.member_id')
-
-# Members
-BOB_ID=$(curl -s -X POST $BASE/v1/groups/$GROUP_ID/members \
-  -H "Content-Type: application/json" \
-  -d '{"display_name": "Bob", "split_weight": 0.25}' | jq -r '.member_id')
-
-CAROL_ID=$(curl -s -X POST $BASE/v1/groups/$GROUP_ID/members \
-  -H "Content-Type: application/json" \
-  -d '{"display_name": "Carol", "split_weight": 0.25}' | jq -r '.member_id')
-
-DAN_ID=$(curl -s -X POST $BASE/v1/groups/$GROUP_ID/members \
-  -H "Content-Type: application/json" \
-  -d '{"display_name": "Dan", "split_weight": 0.25}' | jq -r '.member_id')
-```
-
-Expected per member (201 Created):
-
-```json
-{
-  "member_id": "<uuid>",
-  "user_id": "<uuid>",
-  "display_name": "Alice",
-  "split_weight": 0.25
-}
+echo $MEMBER2 | jq .
+MEMBER2_ID=$(echo $MEMBER2 | jq -r '.member_id')
 ```
 
 ---
 
-## 4. Inspect Group State
+## 5. Set Up KYC and Debit Card (dev shortcut)
+
+Stripe Identity KYC requires real document photos in production. For local dev, set `kyc_status` directly in Postgres. Similarly, `stripe_payment_method_id` is normally set via the SetupIntent flow — for testing, insert a mock value.
+
+```bash
+# Approve KYC and set payment methods for both members
+docker compose exec postgres psql -U tally -d tally -c "
+  UPDATE members
+  SET kyc_status = 'approved',
+      stripe_payment_method_id = 'pm_mock_primary',
+      stripe_backup_payment_method_id = 'pm_mock_backup'
+  WHERE group_id = '$GROUP_ID';"
+```
+
+---
+
+## 6. Issue Virtual Cards
+
+Each member gets their own unique card token (mock returns `card_mock_1`, `card_mock_2`, etc.).
+
+```bash
+# Issue card to creator
+CARD1=$(curl -s -X POST $BASE/v1/cards/issue \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"member_id\": \"$CREATOR_MEMBER_ID\",
+    \"first_name\": \"Test\",
+    \"last_name\": \"User\",
+    \"email\": \"test@example.com\"
+  }")
+
+echo $CARD1 | jq .
+CARD_TOKEN=$(echo $CARD1 | jq -r '.card_token')
+
+# Issue card to second member
+CARD2=$(curl -s -X POST $BASE/v1/cards/issue \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"member_id\": \"$MEMBER2_ID\",
+    \"first_name\": \"Friend\",
+    \"last_name\": \"Smith\",
+    \"email\": \"friend@example.com\"
+  }")
+
+echo $CARD2 | jq .
+CARD2_TOKEN=$(echo $CARD2 | jq -r '.card_token')
+```
+
+---
+
+## 7. Inspect Group State
 
 ```bash
 curl -s $BASE/v1/groups/$GROUP_ID | jq .
 ```
 
-Expected (200 OK):
-
-```json
-{
-  "group_id": "<uuid>",
-  "name": "Trip to Vegas",
-  "currency": "USD",
-  "members": [
-    {
-      "member_id": "<uuid>",
-      "display_name": "Alice",
-      "split_weight": 0.25,
-      "tally_balance_cents": 0,
-      "is_leader": true,
-      "has_card": false
-    },
-    ...
-  ]
-}
-```
-
-Leaders appear first; remaining members are sorted by name.
+Each member should show `"has_card": true` after card issuance.
 
 ---
 
-## 5. Issue Virtual Card Tokens
+## 8. JIT Authorization
 
-Each member receives their own unique virtual card token (Proxy Model). All tokens map to the same group — any member can initiate a purchase on behalf of the circle.
-
-```bash
-# Issue token for Alice (leader)
-ALICE_CARD=$(curl -s -X POST $BASE/v1/cards/issue \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"member_id\": \"$ALICE_ID\",
-    \"first_name\": \"Alice\",
-    \"last_name\": \"Smith\",
-    \"email\": \"alice@example.com\"
-  }" | jq .)
-
-echo $ALICE_CARD
-ALICE_TOKEN=$(echo $ALICE_CARD | jq -r '.card_token')
-
-# Issue token for Bob
-BOB_CARD=$(curl -s -X POST $BASE/v1/cards/issue \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"member_id\": \"$BOB_ID\",
-    \"first_name\": \"Bob\",
-    \"last_name\": \"Johnson\",
-    \"email\": \"bob@example.com\"
-  }" | jq .)
-
-BOB_TOKEN=$(echo $BOB_CARD | jq -r '.card_token')
-```
-
-Expected per token (201 Created):
-
-```json
-{
-  "cardholder_id": "<highnote-cardholder-id>",
-  "card_id": "<highnote-card-id>",
-  "card_token": "<card-token>"
-}
-```
-
-After issuing, `has_card: true` will appear for each member in `GET /v1/groups/:id`. Each token is unique but maps to the same group — the backend resolves `card_token → group_id` on every authorization request.
-
----
-
-## 6. Load Wallet Balances
-
-Pre-load Tally wallet credit for members so Tier 1 of the funding waterfall can be exercised.
+### Helper — generate HMAC signature
 
 ```bash
-# Load $50.00 for Alice
-curl -s -X POST $BASE/v1/wallets/load \
-  -H "Content-Type: application/json" \
-  -d "{\"member_id\": \"$ALICE_ID\", \"amount_cents\": 5000}" | jq .
-
-# Load $50.00 for Bob
-curl -s -X POST $BASE/v1/wallets/load \
-  -H "Content-Type: application/json" \
-  -d "{\"member_id\": \"$BOB_ID\", \"amount_cents\": 5000}" | jq .
-```
-
-Expected (200 OK):
-
-```json
-{ "new_balance_cents": 5000 }
-```
-
----
-
-## 7. JIT Authorization
-
-### Generating an HMAC Signature
-
-The `/v1/auth/jit` and `/v1/webhooks/highnote/authorization` endpoints require a valid HMAC-SHA256 signature. The secret defaults to `dev_webhook_secret_change_in_prod` when running locally.
-
-```bash
-WEBHOOK_SECRET="dev_webhook_secret_change_in_prod"
+WEBHOOK_SECRET="localtestingsecret"  # must match WEBHOOK_SECRET in .env
 
 sign_body() {
   local body="$1"
-  echo -n "$body" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print "sha256="$2}'
+  printf '%s' "$body" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print "sha256="$2}'
 }
 ```
 
-### Scenario A — Tally Wallet Covers Full Amount (Tier 1)
+### Scenario A — Successful Authorization (APPROVE)
 
-Both Alice and Bob have $50 loaded. Alice taps her personal token at a restaurant. A $40 purchase splits to $10/member — covered entirely by Tally balances.
+Any member's card token can initiate a purchase for the whole group.
 
 ```bash
-BODY='{
+BODY=$(cat <<EOF
+{
   "idempotency_key": "txn-001",
-  "card_token": "'"$ALICE_TOKEN"'",
-  "amount_cents": 4000,
-  "currency": "USD",
+  "card_token": "$CARD_TOKEN",
+  "amount_cents": 10000,
+  "currency": "usd",
   "merchant_name": "The Steakhouse",
   "merchant_category": "5812"
-}'
+}
+EOF
+)
 
 SIG=$(sign_body "$BODY")
 
 curl -s -X POST $BASE/v1/auth/jit \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: txn-001" \
   -H "X-Tally-Signature: $SIG" \
+  -H "Idempotency-Key: txn-001" \
   -d "$BODY" | jq .
 ```
 
 Expected (200 OK):
-
 ```json
 {
   "decision": "APPROVE",
-  "transaction_id": "<uuid>",
-  "approved_amount_cents": 4000,
-  "reason": ""
+  "transaction_id": "<uuid>"
 }
 ```
 
-### Scenario B — Direct Pull Fallback (Tier 2)
+### Scenario B — Idempotency (same key, replayed)
 
-Members have $0 Tally balance, but Alice has a linked Plaid account. Bob taps his personal token at a store — the backend resolves his token to the group and checks all members. The mock Plaid client returns a non-zero balance, exercising the direct pull path.
+Re-send the exact same request. The server must return the cached response without creating a duplicate transaction.
 
 ```bash
-# Confirm no wallet balance by checking group state
-curl -s $BASE/v1/groups/$GROUP_ID | jq '.members[].tally_balance_cents'
-
-BODY='{
-  "idempotency_key": "txn-002",
-  "card_token": "'"$BOB_TOKEN"'",
-  "amount_cents": 2000,
-  "currency": "USD",
-  "merchant_name": "Walgreens",
-  "merchant_category": "5912"
-}'
-
-SIG=$(sign_body "$BODY")
-
 curl -s -X POST $BASE/v1/auth/jit \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: txn-002" \
   -H "X-Tally-Signature: $SIG" \
-  -d "$BODY" | jq .
-```
-
-### Scenario C — Idempotency (Replay)
-
-Re-send the same request with the same `Idempotency-Key`. The server must return the cached response without creating a second transaction.
-
-```bash
-# Resend txn-001 exactly as before
-curl -s -X POST $BASE/v1/auth/jit \
-  -H "Content-Type: application/json" \
   -H "Idempotency-Key: txn-001" \
-  -H "X-Tally-Signature: $SIG" \
   -d "$BODY" | jq .
+# transaction_id must be identical to the first response
 ```
 
-The `transaction_id` must be identical to the first response.
-
-### Scenario D — Invalid HMAC (Rejected)
+### Scenario C — Invalid HMAC (rejected)
 
 ```bash
 curl -s -X POST $BASE/v1/auth/jit \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: txn-bad" \
   -H "X-Tally-Signature: sha256=deadbeef" \
+  -H "Idempotency-Key: txn-bad" \
   -d "$BODY" | jq .
+# → {"error":"invalid_signature"}  (401)
 ```
 
-Expected (401 Unauthorized):
-
-```json
-{ "error": "invalid signature" }
-```
-
-### Scenario E — Decline (No Funds)
-
-Use a member token where the group has no balance and no Plaid accounts configured. The backend resolves the token to the group and declines when nobody can cover their share.
+### Scenario D — Unknown card token (DECLINE)
 
 ```bash
-BODY='{
-  "idempotency_key": "txn-decline",
-  "card_token": "'"$ALICE_TOKEN"'",
-  "amount_cents": 99999999,
-  "currency": "USD"
-}'
-
-SIG=$(sign_body "$BODY")
+BAD_BODY='{"idempotency_key":"txn-unknown","card_token":"card_does_not_exist","amount_cents":1000,"currency":"usd"}'
+BAD_SIG=$(sign_body "$BAD_BODY")
 
 curl -s -X POST $BASE/v1/auth/jit \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: txn-decline" \
-  -H "X-Tally-Signature: $SIG" \
-  -d "$BODY" | jq .
+  -H "X-Tally-Signature: $BAD_SIG" \
+  -H "Idempotency-Key: txn-unknown" \
+  -d "$BAD_BODY" | jq .
+# → {"decision":"DECLINE","reason":"authorization_failed"}
 ```
-
-Expected:
-
-```json
-{
-  "decision": "DECLINE",
-  "transaction_id": "",
-  "approved_amount_cents": 0,
-  "reason": "insufficient funds"
-}
-```
-
----
-
-## 8. Highnote Webhook Authorization (Collaborative Authorization)
-
-The Highnote webhook is the real-world entry point for the Proxy Model. When a member taps their token, Highnote sends an `AUTHORIZATION_REQUEST` with the member's unique `cardId` (token). The backend resolves the token to the group and runs the collaborative authorization flow.
-
-```bash
-HN_SECRET="3ac94708bea182cb1bc6503fccff3347"  # matches .env default
-
-sign_hn() {
-  local body="$1"
-  echo -n "$body" | openssl dgst -sha256 -hmac "$HN_SECRET" | awk '{print "sha256="$2}'
-}
-
-# Simulate Alice tapping her personal token at MGM Grand
-HN_BODY='{
-  "id": "evt-hn-001",
-  "type": "AUTHORIZATION_REQUEST",
-  "authorizationRequestId": "hn-auth-req-001",
-  "cardId": "'"$ALICE_TOKEN"'",
-  "transactionAmount": {
-    "value": 3500,
-    "currencyCode": "USD"
-  },
-  "merchantDetails": {
-    "name": "MGM Grand",
-    "categoryCode": "7011"
-  }
-}'
-
-HN_SIG=$(sign_hn "$HN_BODY")
-
-curl -s -X POST $BASE/v1/webhooks/highnote/authorization \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: hn-auth-req-001" \
-  -H "X-Tally-Signature: $HN_SIG" \
-  -d "$HN_BODY" | jq .
-```
-
-Expected (200 OK — always 200 per card processor spec):
-
-```json
-{
-  "authorizationResponseCode": "APPROVED",
-  "approvedTransactionAmount": {
-    "value": 3500,
-    "currencyCode": "USD"
-  }
-}
-```
-
-On decline, `authorizationResponseCode` will be `DO_NOT_HONOR` with no amount field.
 
 ---
 
 ## 9. List Transactions
 
-Fetch the 50 most recent transactions for the group.
-
 ```bash
 curl -s $BASE/v1/groups/$GROUP_ID/transactions | jq .
 ```
 
-Expected (200 OK):
+---
 
-```json
-{
-  "transactions": [
-    {
-      "id": "<uuid>",
-      "amount_cents": 4000,
-      "currency": "USD",
-      "merchant_name": "The Steakhouse",
-      "merchant_category": "5812",
-      "status": "PENDING",
-      "created_at": "2026-03-01T00:00:00Z"
-    }
-  ]
-}
+## 10. Transaction Detail
+
+```bash
+TXN_ID="<transaction_id from step 8>"
+
+curl -s $BASE/v1/groups/$GROUP_ID/transactions/$TXN_ID | jq .
+```
+
+Returns the transaction with per-member splits and any IOUs.
+
+---
+
+## 11. Leader Pre-Authorization
+
+The creator must be marked as leader first:
+
+```bash
+docker compose exec postgres psql -U tally -d tally -c \
+  "UPDATE members SET is_leader = true WHERE id = '$CREATOR_MEMBER_ID';"
+```
+
+Then pre-authorize via the API (caller must be the leader):
+
+```bash
+# Pre-authorize (valid for 24 hours)
+curl -s -X POST $BASE/v1/groups/$GROUP_ID/leader/authorize | jq .
+
+# Check status (any member can read)
+curl -s $BASE/v1/groups/$GROUP_ID/leader/authorize | jq .
+
+# Revoke
+curl -s -X DELETE $BASE/v1/groups/$GROUP_ID/leader/authorize | jq .
 ```
 
 ---
 
-## 10. Full Happy-Path Flow (End-to-End)
+## 12. IOUs
 
-Run this sequence in order to exercise every layer of the system, including the Proxy Card Model where each member gets their own token:
+IOUs are created automatically by the settlement worker when a member's cards fail and leader cover activates. To inspect them:
 
 ```bash
-# 1. Verify health
-curl -s $BASE/healthz | jq .
+curl -s $BASE/v1/groups/$GROUP_ID/ious | jq .
+```
 
-# 2. Create group
-GROUP_ID=$(curl -s -X POST $BASE/v1/groups \
+Mark an IOU settled (after the member pays the leader back out-of-band):
+
+```bash
+IOU_ID="<iou_id>"
+curl -s -X POST $BASE/v1/groups/$GROUP_ID/ious/$IOU_ID/settle | jq .
+```
+
+---
+
+## 13. Payment Method Flow (with real Stripe)
+
+> These endpoints require `STRIPE_SECRET_KEY` to be set in `.env`. Skip for mock mode.
+
+```bash
+# Step 1: Create SetupIntent — returns client_secret for iOS app
+curl -s -X POST $BASE/v1/users/me/payment-method | jq .
+
+# Step 2: iOS app completes SetupIntent using client_secret (Stripe handles card entry)
+# After completion, iOS gets the pm_id from Stripe and calls:
+
+curl -s -X POST $BASE/v1/users/me/payment-method/confirm \
   -H "Content-Type: application/json" \
-  -d '{"name": "E2E Test Group"}' | jq -r '.group_id')
+  -d '{"payment_method_id": "pm_xxxx"}' | jq .
 
-# 3. Add leader member
-LEADER_ID=$(curl -s -X POST $BASE/v1/groups/$GROUP_ID/members \
+# Same flow for backup card:
+curl -s -X POST $BASE/v1/users/me/payment-method/backup | jq .
+curl -s -X POST $BASE/v1/users/me/payment-method/backup/confirm \
   -H "Content-Type: application/json" \
-  -d '{"display_name": "Leader", "split_weight": 0.5, "is_leader": true}' \
-  | jq -r '.member_id')
+  -d '{"payment_method_id": "pm_yyyy"}' | jq .
+```
 
-# 4. Add regular member
-MEMBER_ID=$(curl -s -X POST $BASE/v1/groups/$GROUP_ID/members \
+---
+
+## 14. KYC Flow (with real Stripe)
+
+> Requires `STRIPE_SECRET_KEY` to be set in `.env`. Skip for mock mode — use the psql shortcut in Step 5 instead.
+
+```bash
+# Step 1: Create Identity verification session — returns URL for iOS WebView
+curl -s -X POST $BASE/v1/users/me/kyc \
   -H "Content-Type: application/json" \
-  -d '{"display_name": "Member", "split_weight": 0.5}' \
-  | jq -r '.member_id')
+  -d '{"member_id": "<member_id>"}' | jq .
 
-# 5. Load wallets
-curl -s -X POST $BASE/v1/wallets/load \
+# Step 2: User completes identity check in iOS WebView
+
+# Step 3: Stripe sends identity.verification_session.verified webhook to:
+# POST /v1/webhooks/stripe/identity
+# This updates kyc_status to 'approved' automatically
+```
+
+---
+
+## 15. Full Happy-Path (End-to-End)
+
+```bash
+BASE=http://localhost:8080
+WEBHOOK_SECRET="localtestingsecret"
+
+# 1. Health check
+curl -s $BASE/healthz
+
+# 2. Create user
+curl -s -X POST $BASE/v1/users/me \
   -H "Content-Type: application/json" \
-  -d "{\"member_id\": \"$LEADER_ID\", \"amount_cents\": 10000}" | jq .
+  -d '{"clerk_user_id":"dev-user-local","email":"test@example.com","first_name":"Test","last_name":"User"}'
 
-curl -s -X POST $BASE/v1/wallets/load \
+# 3. Create group (creator auto-added as member)
+GROUP_RESP=$(curl -s -X POST $BASE/v1/groups \
   -H "Content-Type: application/json" \
-  -d "{\"member_id\": \"$MEMBER_ID\", \"amount_cents\": 10000}" | jq .
+  -d '{"name":"e2e-test","display_name":"E2E Test"}')
+GROUP_ID=$(echo $GROUP_RESP | jq -r '.group_id')
+MEMBER_ID=$(echo $GROUP_RESP | jq -r '.creator_member_id')
 
-# 6. Issue card tokens to BOTH members (Proxy Model)
-LEADER_TOKEN=$(curl -s -X POST $BASE/v1/cards/issue \
+# 4. Set up member (kyc + payment method via psql shortcut)
+docker compose exec postgres psql -U tally -d tally -c \
+  "UPDATE members SET kyc_status='approved', stripe_payment_method_id='pm_mock', split_weight=1.0 WHERE id='$MEMBER_ID';"
+
+# 5. Issue card
+CARD_RESP=$(curl -s -X POST $BASE/v1/cards/issue \
   -H "Content-Type: application/json" \
-  -d "{
-    \"member_id\": \"$LEADER_ID\",
-    \"first_name\": \"Test\",
-    \"last_name\": \"Leader\",
-    \"email\": \"leader@example.com\"
-  }" | jq -r '.card_token')
+  -d "{\"member_id\":\"$MEMBER_ID\",\"first_name\":\"Test\",\"last_name\":\"User\",\"email\":\"test@example.com\"}")
+CARD_TOKEN=$(echo $CARD_RESP | jq -r '.card_token')
 
-MEMBER_TOKEN=$(curl -s -X POST $BASE/v1/cards/issue \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"member_id\": \"$MEMBER_ID\",
-    \"first_name\": \"Test\",
-    \"last_name\": \"Member\",
-    \"email\": \"member@example.com\"
-  }" | jq -r '.card_token')
-
-# 7. Authorize a purchase (Member taps THEIR token — not the leader's)
-BODY="{
-  \"idempotency_key\": \"e2e-$(date +%s)\",
-  \"card_token\": \"$MEMBER_TOKEN\",
-  \"amount_cents\": 8000,
-  \"currency\": \"USD\",
-  \"merchant_name\": \"E2E Merchant\"
-}"
-
-SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "dev_webhook_secret_change_in_prod" | awk '{print "sha256="$2}')
+# 6. Authorize a purchase
+BODY="{\"idempotency_key\":\"e2e-$(date +%s)\",\"card_token\":\"$CARD_TOKEN\",\"amount_cents\":5000,\"currency\":\"usd\",\"merchant_name\":\"Test Merchant\"}"
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print "sha256="$2}')
+IDEMPKEY="e2e-$(date +%s)"
 
 curl -s -X POST $BASE/v1/auth/jit \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: e2e-$(date +%s)" \
   -H "X-Tally-Signature: $SIG" \
+  -H "Idempotency-Key: $IDEMPKEY" \
   -d "$BODY" | jq .
 
-# 8. Verify transaction appears
+# 7. Verify transaction in group history
 curl -s $BASE/v1/groups/$GROUP_ID/transactions | jq '.transactions[0]'
-
-# 9. Verify wallet balances decremented for BOTH members
-curl -s $BASE/v1/groups/$GROUP_ID | jq '.members[] | {display_name, tally_balance_cents, has_card}'
 ```
 
 ---
 
-## 11. Edge Cases & Error Conditions
+## Edge Cases
 
 | Scenario | Expected Status | Notes |
 |----------|----------------|-------|
-| `POST /v1/groups` missing `name` | 400 | Required field |
-| `POST /v1/groups/:id/members` bad group UUID | 404 | Group not found |
-| `POST /v1/wallets/load` with `amount_cents: 0` | 400 | Must be > 0 |
-| `POST /v1/wallets/load` unknown `member_id` | 404 | Member not found |
+| `POST /v1/groups` missing `display_name` | 400 | Required field |
+| `POST /v1/groups/:id/members` with weights summing > 1.0 | 422 | Split weight validation |
+| `POST /v1/cards/issue` with `kyc_status = 'pending'` | 403 | KYC required |
 | `POST /v1/cards/issue` unknown `member_id` | 404 | Member not found |
-| `POST /v1/auth/jit` missing HMAC header | 401 | Signature required |
-| `POST /v1/auth/jit` wrong HMAC secret | 401 | Constant-time compare |
-| `POST /v1/auth/jit` duplicate `Idempotency-Key` (concurrent) | 409 | Lock contention |
-| `GET /v1/groups/:id` unknown group | 404 | Group not found |
-| `GET /v1/groups/:id/transactions` unknown group | 404 | Group not found |
+| `POST /v1/auth/jit` missing HMAC header | 401 | `missing_signature` |
+| `POST /v1/auth/jit` wrong HMAC secret | 401 | `invalid_signature` |
+| `POST /v1/auth/jit` duplicate `Idempotency-Key` (concurrent) | 409 | Lock contention — retry in ~1s |
+| `POST /v1/auth/jit` unknown card token | 422 | `DECLINE` / `authorization_failed` |
+| `GET /v1/groups/:id` caller not a member | 403 | Group membership required |
+| `POST /v1/groups/:id/leader/authorize` caller not leader | 403 | Leader role required |
 
 ---
 
 ## Swagger UI
 
-Interactive API documentation is available at:
+Interactive API documentation with all endpoints and schemas:
 
 ```
 http://localhost:8080/swagger/index.html
 ```
-
-All endpoints can be tested directly from the browser using the Swagger UI.

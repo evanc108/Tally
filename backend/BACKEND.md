@@ -2,9 +2,7 @@
 
 ## Overview
 
-Tally's backend is a Go service that powers real-time group spending using a **Proxy Card Architecture**. Rather than sharing a single card, each group member receives their own unique virtual card token — all mapped to the same group. When any member taps their token at a merchant, the backend authorizes the charge in milliseconds by verifying that every member of the group can cover their individual share — simultaneously — before approving the transaction.
-
-The core metaphor is the **Tally Stick**: a single transaction is split into multiple verifiable pieces, one per member, each recorded as an immutable ledger entry.
+Tally's backend is a Go service that powers real-time group spending using a **Proxy Card Architecture**. Rather than sharing a single card, each group member receives their own unique virtual card token — all mapped to the same group. When any member taps their token at a merchant, the backend authorizes the charge in milliseconds by confirming that every member has a linked debit card, then charges each member's card asynchronously at settlement.
 
 ---
 
@@ -12,10 +10,15 @@ The core metaphor is the **Tally Stick**: a single transaction is split into mul
 
 | Layer | Technology | Why |
 |---|---|---|
-| Language | Go 1.22 | Goroutines make parallel bank checks trivial; fast compile + deploy |
+| Language | Go 1.23 | Goroutines for concurrent ledger writes; fast compile + deploy |
 | HTTP Framework | Gin | High-performance routing with middleware chains |
 | Database | PostgreSQL 16 | Double-entry ledger requires ACID guarantees + serializable transactions |
 | Cache / Lock | Redis 7 | Sub-millisecond idempotency checks and distributed locking |
+| Card Issuing | Stripe Issuing | Virtual card issuance; Apple/Google Wallet provisioning; JIT authorization webhooks |
+| Debit Charging | Stripe PaymentIntents | Settlement charges against linked debit cards |
+| Bank Linking | Stripe Financial Connections | Debit card attachment via SetupIntent |
+| Identity / KYC | Stripe Identity | Document verification before card issuance |
+| Auth | Clerk | RS256 JWT verification via JWKS |
 | Schema Migrations | golang-migrate | SQL files embedded in the binary; runs automatically on boot |
 | Containerization | Docker Compose | Single command brings up the full local stack |
 
@@ -25,35 +28,69 @@ The core metaphor is the **Tally Stick**: a single transaction is split into mul
 
 ```
 backend/
-├── main.go                          Entry point — wires everything together
-├── docker-compose.yml               Local stack: Postgres + Redis + App + pgAdmin
-├── Dockerfile                       Multi-stage build → distroless runtime image
+├── main.go                              Entry point — wires everything together
+├── docker-compose.yml                   Local stack: Postgres + Redis + App
+├── Dockerfile                           Multi-stage build → distroless runtime image
 ├── go.mod
 └── internal/
-    ├── config/config.go             Loads all config from environment variables
+    ├── auth/
+    │   └── jit.go                       POST /v1/auth/jit — JIT authorization handler
+    ├── cards/
+    │   └── handler.go                   POST /v1/cards/issue — card issuance with KYC gate
+    ├── config/
+    │   └── config.go                    Loads all config from environment variables
     ├── db/
-    │   ├── db.go                    Connection pool (Postgres) + Redis client
-    │   ├── migrate.go               Runs embedded SQL migrations on boot
+    │   ├── db.go                        Connection pool (Postgres + Redis)
+    │   ├── migrate.go                   Runs embedded SQL migrations on boot
     │   └── migrations/
-    │       ├── 000001_init.up.sql   Full schema definition
-    │       └── 000001_init.down.sql Teardown (drops all tables)
+    │       ├── 000001_init.up.sql       Full base schema
+    │       ├── 000007_stripe_migration  Drops Plaid/Highnote columns, adds Stripe columns
+    │       ├── 000008_kyc_status        Adds kyc_status to members
+    │       └── ...
+    ├── groups/
+    │   └── handler.go                   Group, member, transaction, IOU, leader auth endpoints
     ├── ledger/
-    │   └── posting.go               Double-entry accounting engine
+    │   └── posting.go                   Double-entry accounting engine (bulk inserts)
     ├── middleware/
-    │   ├── hmac.go                  Webhook signature verification
-    │   ├── idempotency.go           Redis-backed request deduplication
-    │   └── logger.go                Structured JSON request logging
-    ├── plaid/
-    │   └── mock.go                  Mock Plaid client (swap for real SDK in prod)
-    └── auth/
-        └── jit.go                   POST /v1/auth/jit — core authorization handler
+    │   ├── clerk.go                     Clerk JWT verification (RS256 via JWKS)
+    │   ├── devauth.go                   Dev bypass — injects DEV_USER_ID when CLERK_JWKS_URL unset
+    │   ├── group.go                     RequireGroupMember, RequireGroupLeader
+    │   ├── hmac.go                      HMAC-SHA256 verification for /v1/auth/jit
+    │   ├── idempotency.go               Redis-backed request deduplication
+    │   ├── logger.go                    Structured JSON request logging
+    │   └── ratelimit.go                 Redis rate limiter
+    ├── settlement/
+    │   └── settle.go                    SettleApprovedTransaction + background worker
+    ├── stripeidentity/
+    │   └── client.go                    Stripe Identity KYC — real + mock
+    ├── stripeissuing/
+    │   └── client.go                    Stripe Issuing cardholder + card — real + mock
+    ├── stripepayment/
+    │   └── client.go                    Stripe SetupIntent + PaymentIntent — real + mock
+    ├── users/
+    │   └── handler.go                   User upsert, payment method, KYC endpoints
+    ├── waterfall/
+    │   └── waterfall.go                 Resolves card token → group + members; builds funding plan
+    └── webhooks/
+        └── stripe.go                    Stripe Issuing authorization, reversal, Identity webhooks
 ```
 
 ---
 
 ## Database Schema
 
-Six tables form the complete data model. All monetary values are stored as **integer cents** (never floats) to avoid rounding errors.
+Eight tables form the complete data model. All monetary values are stored as **integer cents** (never floats) to avoid rounding errors.
+
+### `users`
+One row per Tally user account, keyed by Clerk user ID.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID | Primary key |
+| clerk_user_id | TEXT | Unique. From the Clerk JWT `sub` claim |
+| email | TEXT | |
+| first_name | TEXT | |
+| last_name | TEXT | |
 
 ### `tally_groups`
 Represents a spending group (e.g. "Weekend Trip", "Shared Apartment").
@@ -61,24 +98,32 @@ Represents a spending group (e.g. "Weekend Trip", "Shared Apartment").
 | Column | Type | Notes |
 |---|---|---|
 | id | UUID | Primary key |
-| name | TEXT | Display name |
+| name | TEXT | Short identifier |
+| display_name | TEXT | Human-readable label |
 | currency | CHAR(3) | Default `USD` |
 
 ### `members`
-One row per user per group. A user in three groups has three rows. Each member receives their own unique card token — this is the core of the **Proxy Card Model**. All tokens in a group map to the same `group_id`, so when any member swipes, the backend resolves the token to the group and knows exactly who initiated the purchase.
+One row per user per group. A user in three groups has three rows.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | UUID | Primary key |
-| group_id | UUID | FK → tally_groups. All members' tokens map to this group |
-| card_token | TEXT | Unique. The member's personal virtual card token issued by Highnote. Added to their Apple/Google Wallet |
-| user_id | UUID | The Tally user who owns this token |
-| plaid_access_token | TEXT | Plaid Link credential for this member's bank |
-| plaid_account_id | TEXT | Specific bank account to check |
-| tally_balance_cents | BIGINT | Pre-loaded wallet balance. Checked first before hitting the bank |
-| split_weight | NUMERIC(7,6) | Fractional share of group expenses (e.g. `0.250000` for a 4-way equal split) |
+| group_id | UUID | FK → tally_groups |
+| user_id | UUID | FK → users |
+| display_name | TEXT | Name shown in the group UI |
+| card_token | TEXT | Unique. The member's virtual card token (Stripe Issuing) |
+| stripe_cardholder_id | TEXT | Stripe Issuing cardholder ID |
+| stripe_card_id | TEXT | Stripe Issuing card ID |
+| stripe_payment_method_id | TEXT | Primary linked debit card. Used for settlement |
+| stripe_backup_payment_method_id | TEXT | Fallback debit card if primary fails |
+| kyc_status | TEXT | `pending` / `approved` / `rejected`. Card issuance requires `approved` |
+| tally_balance_cents | BIGINT | Reserved; not currently used |
+| split_weight | NUMERIC(7,6) | Fractional share (e.g. `0.250000` for a 4-way equal split). Sum across group must = 1.0 |
+| is_leader | BOOL | True for the one designated group leader |
+| leader_pre_authorized | BOOL | Leader has opted in to cover member card failures for the current outing |
+| leader_pre_authorized_at | TIMESTAMPTZ | When pre-authorization was set. Expires after 24 hours |
 
-The card token mapping enables per-member controls: individual tokens can be frozen, rate-limited, or revoked without affecting other group members.
+Linking a debit card (`stripe_payment_method_id`) is required before a user can join a group. This invariant allows the JIT handler to always approve without checking balances.
 
 ### `accounts`
 Ledger accounts. Each **member** gets one `asset` account. Each **group** gets one `liability` (clearing) account.
@@ -94,16 +139,16 @@ One row per card swipe. Tracks the lifecycle from authorization to settlement.
 
 | Status | Meaning |
 |---|---|
-| `PENDING` | Created when the swipe arrives, before balance checks complete |
-| `APPROVED` | All members can cover their share; ledger entries written |
-| `DECLINED` | At least one member could not cover their share |
-| `SETTLED` | Money has been collected from all members |
+| `PENDING` | Created when the swipe arrives |
+| `APPROVED` | Ledger entries written; Stripe told to approve |
+| `DECLINED` | Could not be authorized |
+| `SETTLED` | All members' debit cards have been charged |
 | `REVERSED` | Transaction was unwound (e.g. merchant refund) |
 
-The `idempotency_key` column has a `UNIQUE` constraint — this is the database-level backstop against duplicate processing even if Redis is bypassed.
+The `idempotency_key` column has a `UNIQUE` constraint as a backstop against duplicate processing if Redis is bypassed.
 
 ### `journal_entries`
-The immutable double-entry ledger. Every financial event writes at least one row here. Entries are never deleted or updated in place; reversals create new offsetting rows.
+The immutable double-entry ledger. Every financial event writes at least one row here. Entries are never deleted or updated; reversals create new offsetting rows.
 
 | Column | Notes |
 |---|---|
@@ -112,21 +157,34 @@ The immutable double-entry ledger. Every financial event writes at least one row
 | amount_cents | Always positive |
 | status | `PENDING` → `SETTLED` or `REVERSED` |
 
-A database constraint (`chk_no_self_entry`) enforces that debit and credit accounts can never be the same row.
+A constraint (`chk_no_self_entry`) enforces that debit and credit accounts can never be the same.
 
 ### `funding_pulls`
 Records how each member's share will be (or was) collected. One row per member per transaction.
 
 | funding_type | Meaning |
 |---|---|
-| `tally_balance` | Deducted from the member's pre-loaded Tally wallet |
-| `direct_pull` | Pulled directly from the member's linked bank account via ACH |
+| `direct_pull` | Charged to the member's linked debit card via Stripe at settlement |
+| `leader_overwrite` | Member's cards failed; leader's card covered the share. An IOU is recorded |
+| `tally_balance` | Reserved; not used in current flow |
+
+### `iou_entries`
+Records shortfalls covered by the group leader. Created by the settlement worker when a member's primary and backup cards both fail and leader cover is active.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID | Primary key |
+| debtor_member_id | UUID | The member who was short |
+| creditor_member_id | UUID | The leader who covered |
+| transaction_id | UUID | The transaction that triggered the IOU |
+| amount_cents | BIGINT | Amount covered |
+| status | TEXT | `OUTSTANDING` → `SETTLED` |
 
 ---
 
 ## The Double-Entry Ledger
 
-Every card swipe produces one journal entry **per member**. The accounting equation is:
+Every card swipe produces one journal entry **per member**:
 
 ```
 Debit  → member's asset account      (the member now "owes" their share)
@@ -144,129 +202,176 @@ Credit → group's liability account   (the group absorbed the merchant charge)
 
 The group clearing account now has $100 credit, exactly matching the merchant charge. The books balance.
 
-**On reversal**, the debit and credit sides are swapped exactly, creating four new offsetting entries. The original entries are never touched.
+**Example — Bob's card declines at settlement, leader cover activates:**
+
+Journal entries are written identically at JIT time (all `direct_pull`). When the settlement worker charges Bob's card and it fails:
+
+1. Retry Bob's primary card — fails
+2. Try Bob's backup card — fails
+3. Leader (Dave) is pre-authorized — charge Dave's card for Bob's $25
+4. Update Bob's `funding_pull` to `leader_overwrite`
+5. Write `iou_entry`: Bob owes Dave $25
+
+The journal entries themselves do not change. Settlement status is tracked in `funding_pulls` and `iou_entries`.
+
+**On reversal**, debit and credit sides are swapped in new offsetting entries. Original entries are never touched.
 
 The ledger package exposes three functions:
-
-- `PostPendingTransaction` — writes PENDING entries for all splits atomically
-- `SettleTransaction` — marks entries SETTLED and deducts `tally_balance` wallets
+- `PostPendingTransaction` — writes PENDING journal entries and funding_pulls atomically (bulk inserts)
+- `SettleTransaction` — marks entries SETTLED after the settlement worker has charged all cards
 - `ReverseTransaction` — writes offsetting entries to unwind an approved transaction
 
-All three use **SERIALIZABLE isolation** in Postgres to prevent phantom reads when multiple authorizations arrive simultaneously for the same group.
+All three use **SERIALIZABLE isolation** to prevent phantom reads when multiple authorizations arrive simultaneously for the same group.
 
 ---
 
-## The JIT Collaborative Authorization Flow
+## The JIT Authorization Flow
 
-`POST /v1/auth/jit` is the critical path — the Collaborative Authorization endpoint. When any group member taps their personal card token at a merchant, Highnote sends a webhook to this endpoint. It must respond in <2 seconds or the card processor will timeout and decline automatically. The handler has an **8-second budget** for the entire flow.
+`POST /v1/auth/jit` is the critical path. Stripe sends this webhook when a member taps their card. **Stripe requires a response within ~2 seconds or it auto-declines.**
+
+### Why 2 Seconds Is Easily Met
+
+The JIT handler makes **zero external API calls**. All data is in Postgres.
 
 ```
-Highnote (Card Processor)
+Step                          How                  Typical latency
+─────────────────────────────────────────────────────────────────
+1. resolveCard()              Postgres read         ~5–15ms
+2. insertPendingTransaction() Postgres write        ~5–10ms
+3. buildFundingPlan()         In-memory             <1ms
+4. PostPendingTransaction()   Postgres write        ~5–10ms
+─────────────────────────────────────────────────────────────────
+Total JIT handler time                             ~20–50ms
+Stripe's response deadline                         ~2,000ms
+Safety margin                                      ~40×
+```
+
+This is possible because members must link a debit card before joining a group. By swipe time, every member is guaranteed to have a `stripe_payment_method_id`. No balance checks, no external calls needed.
+
+```
+Stripe Issuing
      │
-     │  "Card Token A (Member 1) is trying to spend $90"
-     │  POST /v1/auth/jit
+     │  POST /v1/auth/jit  (or /v1/webhooks/stripe/issuing-authorization)
      │  X-Tally-Signature: sha256=<hex>
      │  Idempotency-Key: <uuid>
      ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Middleware Chain                                           │
-│  1. HMAC Verification  — reject unsigned requests          │
-│  2. Idempotency Check  — return cached response if repeat  │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│  Middleware Chain                                              │
+│  1. RateLimit            — per-IP request cap                 │
+│  2. HMACVerification     — reject unsigned requests           │
+│  3. Idempotency          — replay cached response if repeat   │
+└────────────────────────────────────────────────────────────────┘
      │
      ▼
-┌─────────────────────────────────────────────────────────────┐
-│  JIT Handler (Collaborative Authorization)                  │
-│                                                             │
-│  Step 1: resolveCard()                                      │
-│    SQL query: card_token → group_id + initiating member     │
-│    + all other group member rows.                           │
-│    Also fetches each member's asset account ID and          │
-│    the group's clearing account ID. Single round-trip.      │
-│                                                             │
-│  Step 2: insertPendingTransaction()                         │
-│    Writes a PENDING transaction row immediately.            │
-│    Tags the initiating member's token ID on the txn.        │
-│    The UNIQUE(idempotency_key) constraint is a DB backstop. │
-│                                                             │
-│  Step 3: parallelBalanceCheck()                             │
-│    Spawns one Goroutine per member.                         │
-│    Each goroutine calls Plaid GetAccountBalance().          │
-│    All goroutines run concurrently — total time ≈           │
-│    slowest single Plaid call, not sum of all calls.         │
-│                                                             │
-│  Step 4: buildFundingPlan()                                 │
-│    For each member:                                         │
-│      if tally_balance >= share  →  fund from wallet         │
-│      elif wallet + bank >= share →  direct_pull shortfall   │
-│      else                       →  DECLINE entire txn       │
-│                                                             │
-│  Step 5: PostPendingTransaction() (if all members approved) │
-│    Serializable Postgres transaction writes:                │
-│      • N journal_entries (one per member)                   │
-│      • N funding_pulls   (one per member)                   │
-│      • Updates transaction.status → APPROVED               │
-│    Single atomic commit. If it fails, nothing is written.   │
-│                                                             │
-│  Step 6: Fund & Reimburse                                   │
-│    Highnote pulls from the Product Funding Account to pay   │
-│    the merchant. Backend simultaneously triggers individual │
-│    pulls from each member to reimburse that account.        │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│  JIT Handler  (1.5s timeout)                                  │
+│                                                                │
+│  1. ResolveCard()                                              │
+│     card_token → group_id + all member rows + account IDs     │
+│                                                                │
+│  2. insertPendingTransaction()                                 │
+│     Writes PENDING transaction row immediately                 │
+│                                                                │
+│  3. BuildFundingPlan()                                         │
+│     Every member → direct_pull                                 │
+│     Compute each member's share from split_weight              │
+│     Error if any member is missing stripe_payment_method_id   │
+│                                                                │
+│  4. PostPendingTransaction()                                   │
+│     Serializable Postgres transaction writes atomically:       │
+│       • N journal_entries  (one per member, PENDING)           │
+│       • N funding_pulls    (one per member, direct_pull)       │
+│                                                                │
+│  5. Respond to Stripe (~20–50ms after request arrived)        │
+└────────────────────────────────────────────────────────────────┘
      │
      ▼
 { "decision": "APPROVE", "transaction_id": "..." }
-       or
-{ "decision": "DECLINE", "reason": "insufficient_funds" }
 ```
+
+---
+
+## Settlement
+
+Settlement is decoupled from authorization. Stripe has already fronted the merchant charge; settlement recoups that from each member's debit card.
+
+```
+For each APPROVED transaction:
+
+  For each member:
+    1. Charge stripe_payment_method_id (Stripe PaymentIntent, with idempotency key)
+    2. On failure: retry once (same card)
+    3. On retry failure: charge stripe_backup_payment_method_id
+    4. On both fail + leader pre-authorized (within 24h):
+         a. Charge leader's stripe_payment_method_id for member's share
+         b. Write iou_entry (debtor=member, creditor=leader)
+         c. Update funding_pull.funding_type = 'leader_overwrite'
+    5. On all paths fail: funding_pull.status = FAILED, alert ops
+
+  After all members settled:
+    → ledger.SettleTransaction()
+    → transaction.status = SETTLED
+```
+
+The settlement worker runs as a goroutine immediately after each JIT APPROVE, and also as a background poll every 30 seconds as a safety net for any missed goroutines.
+
+---
+
+## Leader Cover
+
+Leader cover is a settlement-layer fail-safe. Because every member must link a card before joining, JIT always approves. Leader cover handles what happens when a member's card **declines at settlement**.
+
+Before a group outing the leader taps **Pre-authorize** in the app:
+- Sets `leader_pre_authorized = true`, `leader_pre_authorized_at = NOW()`
+- Authorization window is **24 hours**
+
+| Scenario | Result |
+|---|---|
+| Member's card declines at settlement | Retry → backup card → leader cover → FAILED |
+| Leader authorization expired (>24h) | Leader cover skipped; pull marked FAILED |
+| Leader's own card declines | Flagged for review; no self-cover |
 
 ---
 
 ## Safety & Reliability
 
-### HMAC Webhook Verification
-Every request to `/v1/auth/jit` must include:
+### Two Webhook Signature Schemes
+
+**`/v1/auth/jit` — Custom HMAC:**
 ```
-X-Tally-Signature: sha256=<hex(HMAC-SHA256(webhookSecret, rawBody))>
+X-Tally-Signature: sha256=<hex(HMAC-SHA256(WEBHOOK_SECRET, rawBody))>
 ```
-The middleware computes the expected signature and compares using `hmac.Equal` — a **constant-time comparison** that prevents timing-oracle attacks. Requests without a valid signature receive `401` and never reach the handler.
 
-HMAC verification runs **before** idempotency middleware so spoofed requests cannot pollute the response cache.
+**`/v1/webhooks/stripe/*` — Stripe's native scheme:**
+```
+Stripe-Signature: t=<timestamp>,v1=<sig>
+```
+Verified via `webhook.ConstructEvent()` from the Stripe Go SDK. This scheme includes a timestamp to prevent replay attacks. The custom HMAC middleware must **not** be applied to these routes.
 
-### Idempotency (Redis)
-Network retries are a reality in payment systems. The idempotency middleware prevents a retry from double-charging:
+### Idempotency
 
-1. **Cache check** — if `idem:resp:<key>` exists in Redis, replay the cached response immediately without executing the handler.
-2. **Distributed lock** — if no cache, acquire `idem:lock:<key>` with `SET NX` (set-if-not-exists, 30s TTL). A concurrent duplicate request that loses the lock gets `409 Conflict` and is told to retry in ~1s.
-3. **Cache write** — after the handler completes, the response is cached for 24 hours. Only non-5xx responses are cached (5xx errors may be transient and should not be replayed).
-4. **Lock release** — the lock is released via `defer` so it's always removed even if the handler panics.
+1. **Cache check** — if `idem:resp:<key>` exists in Redis, replay immediately
+2. **Distributed lock** — acquire `idem:lock:<key>` with `SET NX`. Concurrent duplicate gets `409`
+3. **Cache write** — response cached for 24 hours (non-5xx only)
+4. **DB backstop** — `UNIQUE(idempotency_key)` on `transactions` catches anything Redis misses
 
-The database's `UNIQUE(idempotency_key)` on the `transactions` table is a final backstop if Redis is ever unavailable.
+### Rate Limiting
 
-### Parallel Bank Verification
-Balance checks use `sync.WaitGroup` to fan out one goroutine per group member. For a 4-member group, all four Plaid calls happen simultaneously. Total latency is bounded by the **slowest single call**, not the sum — typically ~50-100ms instead of 200-400ms.
-
-All goroutines respect the request's context deadline (8s). If the context is cancelled (e.g. the card processor closed the connection), the Plaid calls return immediately via `ctx.Done()`.
-
-### Hybrid Funding Logic
-Each member's share is funded in this priority order:
-
-1. **tally_balance** (the member's pre-loaded Tally wallet) — preferred because it requires no external call at settlement time
-2. **direct_pull** (ACH pull from linked bank) — used when the wallet balance is insufficient but the bank balance covers the gap
-
-If a member's `tally_balance + bankBalance` is less than their share, the **entire transaction is declined**. A partial approval is never issued.
+The JIT endpoint and Stripe webhook endpoints are rate-limited via Redis. The JIT limit prevents a compromised HMAC key from flooding Postgres writes.
 
 ---
 
 ## Middleware Stack
 
-Every request passes through this chain (in order):
-
 ```
-gin.Recovery()          Catches panics, returns 500 instead of crashing
-RequestLogger()         Logs method, path, status, latency_ms as structured JSON
-HMACVerification()      Validates X-Tally-Signature header  [/v1/auth only]
-Idempotency()           Redis cache + SET NX lock            [/v1/auth only]
+gin.Recovery()          Catches panics, returns 500
+RequestLogger()         Structured JSON logging (method, path, status, latency_ms)
+RateLimit()             Redis sliding window                [/v1/auth, /v1/webhooks/stripe]
+HMACVerification()      X-Tally-Signature validation        [/v1/auth/jit only]
+Idempotency()           Redis cache + SET NX lock           [/v1/auth/jit only]
+ClerkAuth() or DevAuth() JWT verification or dev bypass    [all /v1 user-facing routes]
+RequireGroupMember()    Verifies caller is in the group     [/v1/groups/:id/*]
+RequireGroupLeader()    Verifies caller is group leader     [leader authorize endpoints]
 ```
 
 ---
@@ -276,19 +381,22 @@ Idempotency()           Redis cache + SET NX lock            [/v1/auth only]
 ```bash
 cd backend
 
-# 1. Install dependencies and generate go.sum
-go mod tidy
+# 1. Copy and configure environment
+cp .env.example .env
+# Set WEBHOOK_SECRET to any string. Leave Stripe keys empty to use mock clients.
 
-# 2. Start the full stack (Postgres + Redis + App + pgAdmin)
+# 2. Start the full stack
 docker compose up --build
 
 # 3. App is live at http://localhost:8080
-# 4. pgAdmin is at http://localhost:5050
-#    Email: admin@tally.local  |  Password: admin
-#    Connect to host: postgres, port: 5432, db: tally, user: tally, pw: tally_secret
+# 4. Swagger UI at http://localhost:8080/swagger/index.html
 ```
 
-Migrations run automatically when the app boots. They are embedded in the binary via `//go:embed migrations/*.sql` in [internal/db/migrate.go](internal/db/migrate.go) and are safe to run multiple times.
+Migrations run automatically on boot. They are embedded in the binary via `//go:embed migrations/*.sql` and are safe to run multiple times (all use `IF NOT EXISTS` / `IF EXISTS`).
+
+With `STRIPE_SECRET_KEY` empty, the app uses mock Stripe clients that return deterministic fake IDs — no Stripe account required for local development.
+
+With `CLERK_JWKS_URL` empty, all user-facing routes authenticate as `DEV_USER_ID` automatically — no Clerk token required.
 
 ---
 
@@ -296,25 +404,13 @@ Migrations run automatically when the app boots. They are embedded in the binary
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | `postgres://tally:tally_secret@localhost:5432/tally?sslmode=disable` | Postgres connection string |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
-| `WEBHOOK_SECRET` | `dev_webhook_secret_change_in_prod` | Shared secret for HMAC signature verification |
+| `DATABASE_URL` | — | Postgres connection string |
+| `REDIS_URL` | — | Redis connection URL |
+| `WEBHOOK_SECRET` | — | Shared HMAC secret for `/v1/auth/jit` |
+| `STRIPE_SECRET_KEY` | *(empty)* | Stripe API key — empty = mock clients |
+| `STRIPE_WEBHOOK_SECRET` | *(empty)* | Stripe webhook signing secret for `/v1/webhooks/stripe/*` |
+| `STRIPE_ISSUING_CARD_PRODUCT` | *(empty)* | Stripe Issuing card product ID |
+| `CLERK_JWKS_URL` | *(empty)* | Clerk JWKS URL — empty = dev auth bypass |
+| `DEV_USER_ID` | `dev-user-local` | User ID injected by dev auth bypass |
 | `PORT` | `8080` | HTTP listen port |
-| `ENV` | `development` | Set to `production` to enable Gin release mode |
-| `PLAID_CLIENT_ID` | *(empty)* | Leave empty to use the mock Plaid client |
-| `PLAID_SECRET` | *(empty)* | Leave empty to use the mock Plaid client |
-
----
-
-## What Is Not Yet Built
-
-The following are stubbed or deferred for future implementation:
-
-| Feature | Current State | Notes |
-|---|---|---|
-| Real Plaid integration | Mock client with simulated latency | Swap `plaid.NewMockClient()` in [auth/jit.go](internal/auth/jit.go) for the Plaid Go SDK |
-| Settlement worker | `SettleTransaction()` exists but is not called | Needs an async worker that listens for ACH confirmations and calls it |
-| Member / group management APIs | No endpoints | CRUD routes for creating groups and adding members |
-| Authentication | No user auth | JWT or session middleware for the iOS client |
-| Wallet top-up | `tally_balance_cents` column exists | No endpoint to add funds to a member's wallet yet |
-| Reversal webhook | `ReverseTransaction()` exists but is not wired | Needs a `/v1/webhooks/reversal` endpoint |
+| `ENV` | `development` | `production` enables Gin release mode |

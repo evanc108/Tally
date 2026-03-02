@@ -4,6 +4,7 @@ package groups
 import (
 	"database/sql"
 	"log/slog"
+	"math"
 	"net/http"
 	"time"
 
@@ -136,12 +137,10 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 // ── POST /v1/groups/:id/members ───────────────────────────────────────────────
 
 type addMemberRequest struct {
-	DisplayName      string  `json:"display_name"        binding:"required"`
-	UserID           string  `json:"user_id"`           // optional: defaults to caller's user ID
-	PlaidAccessToken string  `json:"plaid_access_token"`
-	PlaidAccountID   string  `json:"plaid_account_id"`
-	SplitWeight      float64 `json:"split_weight"`
-	IsLeader         bool    `json:"is_leader"`
+	DisplayName string  `json:"display_name" binding:"required"`
+	UserID      string  `json:"user_id"`   // optional: defaults to caller's user ID
+	SplitWeight float64 `json:"split_weight"`
+	IsLeader    bool    `json:"is_leader"`
 }
 
 type addMemberResponse struct {
@@ -151,12 +150,13 @@ type addMemberResponse struct {
 	SplitWeight float64 `json:"split_weight"`
 }
 
-// AddMember adds a member to an existing group and creates their asset ledger account.
-// SplitWeight defaults to 0.25 if not provided; callers are responsible for
-// ensuring all members' weights sum to 1.0.
+// AddMember adds a member to an existing group and creates their asset ledger
+// account. The sum of all split_weight values in the group must not exceed
+// 1.000000 after the addition; the caller is responsible for distributing
+// weights correctly before the group goes live.
 //
 // @Summary      Add a member to a group
-// @Description  Creates a member record (with optional Plaid tokens) and provisions their asset ledger account.
+// @Description  Creates a member record and provisions their asset ledger account. Enforces that the total split weight for the group does not exceed 1.0.
 // @Tags         groups
 // @Accept       json
 // @Produce      json
@@ -165,6 +165,7 @@ type addMemberResponse struct {
 // @Success      201  {object} addMemberResponse
 // @Failure      400  {object} map[string]string
 // @Failure      404  {object} map[string]string
+// @Failure      422  {object} map[string]string
 // @Failure      500  {object} map[string]string
 // @Router       /v1/groups/{id}/members [post]
 func (h *Handler) AddMember(c *gin.Context) {
@@ -196,8 +197,7 @@ func (h *Handler) AddMember(c *gin.Context) {
 		return
 	}
 
-	// Ensure the user exists in the users table (upsert so leaders can add
-	// members who haven't called /users/me yet).
+	// Ensure the user exists in the users table.
 	if _, err := h.db.ExecContext(c.Request.Context(),
 		`INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, userID,
 	); err != nil {
@@ -217,12 +217,9 @@ func (h *Handler) AddMember(c *gin.Context) {
 
 	if _, err := tx.ExecContext(c.Request.Context(), `
 		INSERT INTO members
-			(id, group_id, user_id, display_name,
-			 plaid_access_token, plaid_account_id,
-			 split_weight, is_leader)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			(id, group_id, user_id, display_name, split_weight, is_leader)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
 		memberID, groupID, userID, req.DisplayName,
-		nullStr(req.PlaidAccessToken), nullStr(req.PlaidAccountID),
 		req.SplitWeight, req.IsLeader,
 	); err != nil {
 		slog.ErrorContext(c.Request.Context(), "create member failed", "error", err)
@@ -236,6 +233,24 @@ func (h *Handler) AddMember(c *gin.Context) {
 	); err != nil {
 		slog.ErrorContext(c.Request.Context(), "create member account failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+		return
+	}
+
+	// Validate that total split weight does not exceed 1.0 after this insert.
+	var totalWeight float64
+	if err := tx.QueryRowContext(c.Request.Context(),
+		`SELECT COALESCE(SUM(split_weight::float8), 0) FROM members WHERE group_id = $1`,
+		groupID,
+	).Scan(&totalWeight); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+	// Allow a tiny float tolerance.
+	if totalWeight > 1.0+1e-6 {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error":        "split_weight_exceeded",
+			"total_weight": math.Round(totalWeight*1e6) / 1e6,
+		})
 		return
 	}
 
@@ -317,19 +332,20 @@ type memberSummary struct {
 	TallyBalanceCents int64   `json:"tally_balance_cents"`
 	IsLeader          bool    `json:"is_leader"`
 	HasCard           bool    `json:"has_card"`
+	KYCStatus         string  `json:"kyc_status"`
 }
 
 type getGroupResponse struct {
-	GroupID   string          `json:"group_id"`
-	Name      string          `json:"name"`
-	Currency  string          `json:"currency"`
-	Members   []memberSummary `json:"members"`
+	GroupID  string          `json:"group_id"`
+	Name     string          `json:"name"`
+	Currency string          `json:"currency"`
+	Members  []memberSummary `json:"members"`
 }
 
 // GetGroup returns group metadata and a summary of all members.
 //
 // @Summary      Get a group
-// @Description  Returns group metadata (name, currency) and a summary of all members including balances.
+// @Description  Returns group metadata (name, currency) and a summary of all members.
 // @Tags         groups
 // @Produce      json
 // @Param        id  path string true "Group ID (UUID)"
@@ -358,7 +374,8 @@ func (h *Handler) GetGroup(c *gin.Context) {
 
 	rows, err := h.db.QueryContext(c.Request.Context(), `
 		SELECT id, display_name, split_weight::float8, tally_balance_cents, is_leader,
-		       (card_token IS NOT NULL) AS has_card
+		       (card_token IS NOT NULL) AS has_card,
+		       kyc_status
 		FROM members
 		WHERE group_id = $1
 		ORDER BY is_leader DESC, display_name ASC`,
@@ -374,7 +391,7 @@ func (h *Handler) GetGroup(c *gin.Context) {
 	for rows.Next() {
 		var m memberSummary
 		if err := rows.Scan(&m.MemberID, &m.DisplayName, &m.SplitWeight,
-			&m.TallyBalanceCents, &m.IsLeader, &m.HasCard); err != nil {
+			&m.TallyBalanceCents, &m.IsLeader, &m.HasCard, &m.KYCStatus); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "scan failed"})
 			return
 		}
@@ -451,10 +468,364 @@ func (h *Handler) ListTransactions(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"transactions": txns})
 }
 
-// nullStr converts an empty string to nil for nullable TEXT columns.
-func nullStr(s string) interface{} {
-	if s == "" {
-		return nil
+// ── GET /v1/groups/:id/transactions/:txnId ────────────────────────────────────
+
+type fundingPullDetail struct {
+	MemberID    string `json:"member_id"`
+	DisplayName string `json:"display_name"`
+	AmountCents int64  `json:"amount_cents"`
+	FundingType string `json:"funding_type"`
+	Status      string `json:"status"`
+}
+
+type iouDetail struct {
+	ID               string `json:"id"`
+	DebtorMemberID   string `json:"debtor_member_id"`
+	CreditorMemberID string `json:"creditor_member_id"`
+	AmountCents      int64  `json:"amount_cents"`
+	Status           string `json:"status"`
+}
+
+type transactionDetail struct {
+	ID               string              `json:"id"`
+	AmountCents      int64               `json:"amount_cents"`
+	Currency         string              `json:"currency"`
+	MerchantName     string              `json:"merchant_name,omitempty"`
+	MerchantCategory string              `json:"merchant_category,omitempty"`
+	Status           string              `json:"status"`
+	CreatedAt        string              `json:"created_at"`
+	UpdatedAt        string              `json:"updated_at"`
+	Splits           []fundingPullDetail `json:"splits"`
+	IOUs             []iouDetail         `json:"ious"`
+}
+
+// GetTransaction returns full detail for a single transaction.
+//
+// @Summary      Get transaction detail
+// @Description  Returns a transaction with per-member funding results and any IOUs.
+// @Tags         groups
+// @Produce      json
+// @Param        id    path string true "Group ID (UUID)"
+// @Param        txnId path string true "Transaction ID (UUID)"
+// @Success      200 {object} transactionDetail
+// @Failure      400 {object} map[string]string
+// @Failure      404 {object} map[string]string
+// @Failure      500 {object} map[string]string
+// @Router       /v1/groups/{id}/transactions/{txnId} [get]
+func (h *Handler) GetTransaction(c *gin.Context) {
+	groupID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group_id"})
+		return
 	}
-	return s
+	txnID, err := uuid.Parse(c.Param("txnId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid transaction_id"})
+		return
+	}
+
+	var detail transactionDetail
+	var createdAt, updatedAt time.Time
+	err = h.db.QueryRowContext(c.Request.Context(), `
+		SELECT id, amount_cents, currency,
+		       COALESCE(merchant_name,''), COALESCE(merchant_category,''),
+		       status, created_at, updated_at
+		FROM transactions
+		WHERE id = $1 AND group_id = $2`,
+		txnID, groupID,
+	).Scan(&detail.ID, &detail.AmountCents, &detail.Currency,
+		&detail.MerchantName, &detail.MerchantCategory,
+		&detail.Status, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "transaction not found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+	detail.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	detail.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+
+	// Load per-member funding pulls.
+	splitRows, err := h.db.QueryContext(c.Request.Context(), `
+		SELECT fp.member_id, m.display_name, fp.amount_cents, fp.funding_type, fp.status
+		FROM funding_pulls fp
+		JOIN members m ON m.id = fp.member_id
+		WHERE fp.transaction_id = $1
+		ORDER BY m.display_name ASC`,
+		txnID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+	defer splitRows.Close()
+
+	detail.Splits = []fundingPullDetail{}
+	for splitRows.Next() {
+		var fp fundingPullDetail
+		if err := splitRows.Scan(&fp.MemberID, &fp.DisplayName, &fp.AmountCents, &fp.FundingType, &fp.Status); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "scan failed"})
+			return
+		}
+		detail.Splits = append(detail.Splits, fp)
+	}
+
+	// Load IOUs for this transaction.
+	iouRows, err := h.db.QueryContext(c.Request.Context(), `
+		SELECT id, debtor_member_id, creditor_member_id, amount_cents, status
+		FROM iou_entries
+		WHERE transaction_id = $1`,
+		txnID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+	defer iouRows.Close()
+
+	detail.IOUs = []iouDetail{}
+	for iouRows.Next() {
+		var iou iouDetail
+		if err := iouRows.Scan(&iou.ID, &iou.DebtorMemberID, &iou.CreditorMemberID, &iou.AmountCents, &iou.Status); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "scan failed"})
+			return
+		}
+		detail.IOUs = append(detail.IOUs, iou)
+	}
+
+	c.JSON(http.StatusOK, detail)
+}
+
+// ── POST/DELETE/GET /v1/groups/:id/leader/authorize ───────────────────────────
+
+type leaderAuthResponse struct {
+	PreAuthorized bool    `json:"pre_authorized"`
+	ExpiresAt     *string `json:"expires_at,omitempty"`
+}
+
+// SetLeaderAuthorization sets or clears leader pre-authorization.
+//
+// @Summary      Set leader pre-authorization
+// @Description  Enables the leader cover fail-safe for the next 24 hours. Requires the caller to be the group leader.
+// @Tags         groups
+// @Produce      json
+// @Param        id path string true "Group ID (UUID)"
+// @Success      200 {object} leaderAuthResponse
+// @Failure      403 {object} map[string]string
+// @Router       /v1/groups/{id}/leader/authorize [post]
+func (h *Handler) SetLeaderAuthorization(c *gin.Context) {
+	memberID, _ := c.Get("member_id")
+	mid, _ := memberID.(string)
+
+	_, err := h.db.ExecContext(c.Request.Context(), `
+		UPDATE members
+		SET leader_pre_authorized    = true,
+		    leader_pre_authorized_at = NOW(),
+		    updated_at               = NOW()
+		WHERE id = $1`, mid,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+
+	expiresAt := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+	c.JSON(http.StatusOK, leaderAuthResponse{PreAuthorized: true, ExpiresAt: &expiresAt})
+}
+
+// ClearLeaderAuthorization revokes leader pre-authorization.
+//
+// @Summary      Revoke leader pre-authorization
+// @Description  Disables leader cover immediately.
+// @Tags         groups
+// @Produce      json
+// @Param        id path string true "Group ID (UUID)"
+// @Success      200 {object} leaderAuthResponse
+// @Router       /v1/groups/{id}/leader/authorize [delete]
+func (h *Handler) ClearLeaderAuthorization(c *gin.Context) {
+	memberID, _ := c.Get("member_id")
+	mid, _ := memberID.(string)
+
+	_, err := h.db.ExecContext(c.Request.Context(), `
+		UPDATE members
+		SET leader_pre_authorized = false,
+		    updated_at            = NOW()
+		WHERE id = $1`, mid,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, leaderAuthResponse{PreAuthorized: false})
+}
+
+// GetLeaderAuthorization returns the current pre-authorization status.
+//
+// @Summary      Get leader pre-authorization status
+// @Description  Returns whether the leader has pre-authorized and when it expires.
+// @Tags         groups
+// @Produce      json
+// @Param        id path string true "Group ID (UUID)"
+// @Success      200 {object} leaderAuthResponse
+// @Router       /v1/groups/{id}/leader/authorize [get]
+func (h *Handler) GetLeaderAuthorization(c *gin.Context) {
+	groupID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group_id"})
+		return
+	}
+
+	var authorized bool
+	var authorizedAt sql.NullTime
+	err = h.db.QueryRowContext(c.Request.Context(), `
+		SELECT leader_pre_authorized, leader_pre_authorized_at
+		FROM members
+		WHERE group_id = $1 AND is_leader = true
+		LIMIT 1`,
+		groupID,
+	).Scan(&authorized, &authorizedAt)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "leader not found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+
+	resp := leaderAuthResponse{PreAuthorized: authorized}
+	if authorized && authorizedAt.Valid {
+		expiresAt := authorizedAt.Time.UTC().Add(24 * time.Hour)
+		if time.Now().UTC().Before(expiresAt) {
+			s := expiresAt.Format(time.RFC3339)
+			resp.ExpiresAt = &s
+		} else {
+			resp.PreAuthorized = false
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// ── GET /v1/groups/:id/ious ───────────────────────────────────────────────────
+
+type iouSummary struct {
+	ID               string `json:"id"`
+	DebtorMemberID   string `json:"debtor_member_id"`
+	DebtorName       string `json:"debtor_name"`
+	CreditorMemberID string `json:"creditor_member_id"`
+	CreditorName     string `json:"creditor_name"`
+	TransactionID    string `json:"transaction_id"`
+	AmountCents      int64  `json:"amount_cents"`
+	Status           string `json:"status"`
+	CreatedAt        string `json:"created_at"`
+}
+
+// ListIOUs returns outstanding IOUs for the group.
+//
+// @Summary      List IOUs
+// @Description  Returns all outstanding IOUs for the group.
+// @Tags         groups
+// @Produce      json
+// @Param        id path string true "Group ID (UUID)"
+// @Success      200 {object} map[string][]iouSummary
+// @Router       /v1/groups/{id}/ious [get]
+func (h *Handler) ListIOUs(c *gin.Context) {
+	groupID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group_id"})
+		return
+	}
+
+	rows, err := h.db.QueryContext(c.Request.Context(), `
+		SELECT i.id, i.debtor_member_id, d.display_name,
+		       i.creditor_member_id, cr.display_name,
+		       i.transaction_id, i.amount_cents, i.status, i.created_at
+		FROM iou_entries i
+		JOIN members d  ON d.id  = i.debtor_member_id
+		JOIN members cr ON cr.id = i.creditor_member_id
+		JOIN transactions t ON t.id = i.transaction_id
+		WHERE t.group_id = $1
+		ORDER BY i.created_at DESC`,
+		groupID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+	defer rows.Close()
+
+	ious := []iouSummary{}
+	for rows.Next() {
+		var i iouSummary
+		var createdAt time.Time
+		if err := rows.Scan(&i.ID, &i.DebtorMemberID, &i.DebtorName,
+			&i.CreditorMemberID, &i.CreditorName,
+			&i.TransactionID, &i.AmountCents, &i.Status, &createdAt); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "scan failed"})
+			return
+		}
+		i.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		ious = append(ious, i)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ious": ious})
+}
+
+// ── POST /v1/groups/:id/ious/:iouId/settle ────────────────────────────────────
+
+// SettleIOU marks an IOU as settled. Caller must be the debtor or creditor.
+//
+// @Summary      Settle an IOU
+// @Description  Marks an IOU as settled. Requires the caller to be the debtor or creditor of the IOU.
+// @Tags         groups
+// @Produce      json
+// @Param        id    path string true "Group ID (UUID)"
+// @Param        iouId path string true "IOU ID (UUID)"
+// @Success      200 {object} map[string]string
+// @Failure      403 {object} map[string]string
+// @Failure      404 {object} map[string]string
+// @Router       /v1/groups/{id}/ious/{iouId}/settle [post]
+func (h *Handler) SettleIOU(c *gin.Context) {
+	iouID, err := uuid.Parse(c.Param("iouId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid iou_id"})
+		return
+	}
+
+	callerMemberID, _ := c.Get("member_id")
+	mid, _ := callerMemberID.(string)
+
+	// Verify the caller is the debtor or creditor.
+	var debtorID, creditorID string
+	err = h.db.QueryRowContext(c.Request.Context(),
+		`SELECT debtor_member_id, creditor_member_id FROM iou_entries WHERE id = $1`,
+		iouID,
+	).Scan(&debtorID, &creditorID)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "iou not found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+
+	if mid != debtorID && mid != creditorID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized to settle this IOU"})
+		return
+	}
+
+	_, err = h.db.ExecContext(c.Request.Context(), `
+		UPDATE iou_entries
+		SET status = 'SETTLED', updated_at = NOW()
+		WHERE id = $1 AND status = 'OUTSTANDING'`,
+		iouID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "settled"})
 }
