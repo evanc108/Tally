@@ -33,38 +33,53 @@ struct ContentView: View {
 // MARK: - Home Tab
 
 private struct HomeTab: View {
+    @State private var showCreateFlow = false
+    @State private var circles: [TallyCircle] = []
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: TallySpacing.lg) {
-                Spacer()
-                Image(systemName: "person.3")
-                    .font(.system(size: 48))
-                    .foregroundStyle(TallyColors.textSecondary)
-                Text("No circles yet")
-                    .font(TallyFont.title)
-                    .foregroundStyle(TallyColors.textPrimary)
-                Text("Create a circle to start splitting expenses with friends.")
-                    .font(TallyFont.body)
-                    .foregroundStyle(TallyColors.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, TallySpacing.xxl)
-                Button("Create Circle") {}
-                    .buttonStyle(TallyPrimaryButtonStyle())
-                    .padding(.horizontal, TallySpacing.screenPadding)
-                Spacer()
+            Group {
+                if circles.isEmpty {
+                    emptyState
+                } else {
+                    CircleListView(circles: circles) { _ in }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(TallyColors.bgPrimary)
             .navigationTitle("Circles")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                    } label: {
+                    Button { showCreateFlow = true } label: {
                         Image(systemName: "plus")
                     }
                     .accessibilityLabel("Create circle")
                 }
             }
+            .fullScreenCover(isPresented: $showCreateFlow) {
+                CreateCircleFlowView()
+            }
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: TallySpacing.lg) {
+            Spacer()
+            Image(systemName: "person.3")
+                .font(.system(size: 48))
+                .foregroundStyle(TallyColors.textSecondary)
+            Text("No circles yet")
+                .font(TallyFont.title)
+                .foregroundStyle(TallyColors.textPrimary)
+            Text("Create a circle to start splitting expenses with friends.")
+                .font(TallyFont.body)
+                .foregroundStyle(TallyColors.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, TallySpacing.xxl)
+            Button("Create Circle") { showCreateFlow = true }
+                .buttonStyle(TallyPrimaryButtonStyle())
+                .padding(.horizontal, TallySpacing.screenPadding)
+            Spacer()
         }
     }
 }

@@ -1,0 +1,17 @@
+OLIVE GARDEN
+1234 Main Street
+Orlando, FL 32801
+(407) 555-0123
+
+Table 4  Server: Mike
+03/01/2026  7:45 PM
+
+Chicken Parm           18.99
+Iced Tea                2.99
+Caesar Salad            9.49
+
+Subtotal               31.47
+Tax                     2.52
+Total                  33.99
+
+Thank you for dining with us!

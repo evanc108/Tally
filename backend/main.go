@@ -27,6 +27,7 @@ import (
 	"github.com/tally/backend/internal/highnote"
 	"github.com/tally/backend/internal/middleware"
 	plaidpkg "github.com/tally/backend/internal/plaid"
+	"github.com/tally/backend/internal/receipts"
 	"github.com/tally/backend/internal/users"
 )
 
@@ -148,6 +149,12 @@ func main() {
 
 		api.POST("/cards/issue",  cardHandler.IssueCard)
 		api.POST("/wallets/load", cardHandler.LoadWallet)
+
+		// ── Receipt parsing (stateless, rate-limited) ────────────────────────
+		receiptHandler := receipts.NewHandler()
+		receiptGroup := api.Group("/receipts")
+		receiptGroup.Use(middleware.RateLimit(rdb, 10, time.Minute))
+		receiptGroup.POST("/parse", receiptHandler.ParseReceipt)
 	}
 
 	// ── HTTP server with graceful shutdown ────────────────────────────────────
