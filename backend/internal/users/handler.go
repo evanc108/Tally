@@ -1,22 +1,28 @@
-// Package users implements the user registration endpoint.
+// Package users implements user registration, payment method management, and
+// KYC verification endpoints.
 package users
 
 import (
 	"database/sql"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tally/backend/internal/middleware"
+	"github.com/tally/backend/internal/stripeidentity"
+	"github.com/tally/backend/internal/stripepayment"
 )
 
 // Handler handles user routes.
 type Handler struct {
-	db *sql.DB
+	db       *sql.DB
+	payment  stripepayment.PaymentClient
+	identity stripeidentity.IdentityClient
 }
 
-func NewHandler(db *sql.DB) *Handler {
-	return &Handler{db: db}
+func NewHandler(db *sql.DB, payment stripepayment.PaymentClient, identity stripeidentity.IdentityClient) *Handler {
+	return &Handler{db: db, payment: payment, identity: identity}
 }
 
 type meResponse struct {
@@ -24,17 +30,6 @@ type meResponse struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// Me upserts the authenticated Clerk user into the local users table and
-// returns their record. Safe to call on every app launch — idempotent.
-//
-// @Summary      Register / fetch current user
-// @Description  Upserts the Clerk user ID into the users table. Call this once after sign-in before making any other API calls. Returns the user record.
-// @Tags         users
-// @Produce      json
-// @Success      200  {object} meResponse
-// @Failure      401  {object} map[string]string
-// @Failure      500  {object} map[string]string
-// @Router       /v1/users/me [post]
 func (h *Handler) Me(c *gin.Context) {
 	userID, _ := c.Get(middleware.ClerkUserIDKey)
 	id, _ := userID.(string)
@@ -59,4 +54,130 @@ func (h *Handler) Me(c *gin.Context) {
 		UserID:    id,
 		CreatedAt: createdAt.UTC().Format(time.RFC3339),
 	})
+}
+
+type createSetupIntentResponse struct {
+	ClientSecret string `json:"client_secret"`
+}
+
+func (h *Handler) CreateSetupIntent(c *gin.Context) {
+	userID, _ := c.Get(middleware.ClerkUserIDKey)
+	id, _ := userID.(string)
+
+	clientSecret, err := h.payment.CreateSetupIntent(c.Request.Context(), id)
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "CreateSetupIntent failed", "user_id", id, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "stripe error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, createSetupIntentResponse{ClientSecret: clientSecret})
+}
+
+type confirmPaymentMethodRequest struct {
+	MemberID        string `json:"member_id"         binding:"required"`
+	PaymentMethodID string `json:"payment_method_id" binding:"required"`
+}
+
+func (h *Handler) ConfirmPaymentMethod(c *gin.Context) {
+	var req confirmPaymentMethodRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID, _ := c.Get(middleware.ClerkUserIDKey)
+	id, _ := userID.(string)
+
+	res, err := h.db.ExecContext(c.Request.Context(), `
+		UPDATE members
+		SET stripe_payment_method_id = $1, updated_at = NOW()
+		WHERE id = $2 AND user_id = $3`,
+		req.PaymentMethodID, req.MemberID, id,
+	)
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "confirm PM failed", "member_id", req.MemberID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "member not found or not owned by you"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "payment_method_attached"})
+}
+
+func (h *Handler) CreateBackupSetupIntent(c *gin.Context) {
+	userID, _ := c.Get(middleware.ClerkUserIDKey)
+	id, _ := userID.(string)
+
+	clientSecret, err := h.payment.CreateSetupIntent(c.Request.Context(), id)
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "CreateBackupSetupIntent failed", "user_id", id, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "stripe error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, createSetupIntentResponse{ClientSecret: clientSecret})
+}
+
+type confirmBackupRequest struct {
+	MemberID        string `json:"member_id"         binding:"required"`
+	PaymentMethodID string `json:"payment_method_id" binding:"required"`
+}
+
+func (h *Handler) ConfirmBackupPaymentMethod(c *gin.Context) {
+	var req confirmBackupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID, _ := c.Get(middleware.ClerkUserIDKey)
+	id, _ := userID.(string)
+
+	res, err := h.db.ExecContext(c.Request.Context(), `
+		UPDATE members
+		SET stripe_backup_payment_method_id = $1, updated_at = NOW()
+		WHERE id = $2 AND user_id = $3`,
+		req.PaymentMethodID, req.MemberID, id,
+	)
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "confirm backup PM failed", "member_id", req.MemberID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "member not found or not owned by you"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "backup_payment_method_attached"})
+}
+
+type kycRequest struct {
+	MemberID string `json:"member_id" binding:"required"`
+}
+
+type kycResponse struct {
+	SessionID string `json:"session_id"`
+	URL       string `json:"url"`
+}
+
+func (h *Handler) StartKYC(c *gin.Context) {
+	var req kycRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	sessionID, url, err := h.identity.CreateVerificationSession(c.Request.Context(), req.MemberID)
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "CreateVerificationSession failed", "member_id", req.MemberID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "stripe error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, kycResponse{SessionID: sessionID, URL: url})
 }

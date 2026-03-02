@@ -2,7 +2,7 @@
 
 **Real-time group spending. No one fronts. No one chases.**
 
-Tally is a next-generation fintech platform that eliminates the social and financial friction of group spending. Unlike IOU trackers (Splitwise) or P2P apps (Venmo), Tally splits a payment at the exact millisecond of the transaction — so nobody fronts money and nobody has to ask for it back.
+Tally is a fintech platform that eliminates the social and financial friction of group spending. Unlike IOU trackers (Splitwise) or P2P apps (Venmo), Tally splits a payment at the exact millisecond of the transaction — so nobody fronts money and nobody has to ask for it back.
 
 ---
 
@@ -10,7 +10,7 @@ Tally is a next-generation fintech platform that eliminates the social and finan
 
 Every group payment tool today has the same flaw: **one person gets stuck covering the bill**. They front $300 for dinner, then spend the next week sending passive-aggressive reminders to friends. The debt lingers. The friendship strains.
 
-Tally solves this at the infrastructure level. When a Tally card is swiped, the system identifies the group, verifies every member's balance simultaneously, and authorizes the transaction only when everyone can cover their share — in under two seconds.
+Tally solves this at the infrastructure level. When a Tally card is swiped, the system identifies the group and authorizes the transaction in under two seconds — then charges every member's linked debit card automatically.
 
 ---
 
@@ -18,77 +18,72 @@ Tally solves this at the infrastructure level. When a Tally card is swiped, the 
 
 ### 1. The Proxy Card Architecture
 
-Tally doesn't share a single card across group members. Instead, it uses a **Proxy Model** powered by Highnote's Collaborative Authorization:
+Each Tally group has a single virtual card account (via Stripe Issuing). Every member gets their own unique virtual card token, added to their Apple/Google Wallet. To each user it feels like they're all using the "Group Card."
 
-- **One Group Account**: Each Tally group has a single virtual financial account set to On-Demand Funding (JIT Funding). Its balance is always $0.00 until a transaction happens.
-- **Per-Member Card Tokens**: Every member receives their own unique virtual card token, added to their individual Apple/Google Wallet. To each user, it feels like they're all using the "Group Card."
-- **Token-to-Group Mapping**: In the backend, all member tokens map to the same Group ID. When any member taps their phone, Tally knows exactly which group to charge and which member initiated the purchase.
-
-This proxy model solves the problems of traditional shared cards:
+When any member taps at a merchant, Tally's backend resolves their card token to the group, splits the charge across all members, and responds to Stripe with APPROVE or DECLINE — in ~20ms.
 
 | Problem | Traditional Shared Card | Tally Proxy Model |
 |---------|------------------------|-------------------|
-| KYC/Identity | Who is legally responsible for the debt? | Each member is KYC'd individually; the Leader owns the group account |
-| Security | If one person loses the card, everyone is locked out | You can freeze one member's token without affecting others |
-| Tracking | Hard to see who spent what | Every transaction is tagged with the specific member's token ID |
-| Limits | One shared limit for the whole group | Per-member spending limits (e.g., $50 for Member A, $500 for the Leader) |
+| KYC/Identity | Who is legally responsible? | Each member is KYC'd individually via Stripe Identity |
+| Security | One lost card locks everyone out | Freeze one member's token without affecting others |
+| Tracking | Hard to see who spent what | Every transaction is tagged with the initiating member's token |
+| Limits | One shared limit for the whole group | Per-member controls |
 
-### 2. Just-In-Time (JIT) Collaborative Authorization
+### 2. Just-In-Time (JIT) Authorization
 
-When any group member taps their card token at a merchant, Highnote sends a webhook to Tally's backend:
+When any group member taps their card at a merchant, Stripe sends an authorization webhook to Tally's backend:
 
 ```
-Member taps their card token at register
+Member taps card at register
         │
         ▼
-Highnote sends authorization webhook to Tally
+Stripe sends issuing_authorization.created webhook
         │
         ▼
-Backend maps card token → Group ID + initiating member
+Backend resolves card token → group + all members
         │
         ▼
-Check all members' balances simultaneously (parallel Plaid calls)
+Verify every member has a linked debit card
         │
-        ├─ Everyone can cover their share?
-        │         │
-        │         ▼
-        │    APPROVE — Highnote pulls from Product Funding Account
-        │    Backend triggers individual pulls from each member
+        ▼
+Write PENDING ledger entries for all members
         │
-        └─ Anyone short?
-                  │
-                  ▼
-             Apply Leader Cover or DECLINE
+        ▼
+APPROVE — Stripe fronts the merchant charge
+        │
+        ▼
+Settlement worker charges each member's debit card
 ```
 
-Total latency budget: **8 seconds** (bounded by the card network's authorization window). In practice, parallel balance checks typically resolve in 50–100ms.
+Total JIT latency: **~20–50ms** (Postgres reads only, no external API calls). Stripe's deadline is 2 seconds — Tally responds with a 40× safety margin.
 
-### 3. Hybrid Funding Waterfall
+### 3. Funding Model
 
-Each member's share is funded in priority order:
+Every member must link a debit card (Stripe PaymentMethod) before joining a group. This single invariant makes the JIT handler simple: because every member has a card on file, the transaction is always approved at swipe time. The actual debit happens at settlement.
 
-| Tier | Source | When Used |
-|------|--------|-----------|
-| 1 | **Tally Wallet** (pre-loaded balance) | Preferred — no external call at settlement |
-| 2 | **Direct Pull** (linked bank via Plaid/ACH) | When wallet is insufficient but bank covers the gap |
-| — | **DECLINE** | If `wallet + bank < share` for any member |
+| Stage | What Happens |
+|-------|-------------|
+| **Card swipe** | Stripe fronts the merchant charge from Stripe's own funds |
+| **Settlement** | Settlement worker charges each member's linked debit card via Stripe PaymentIntent |
+| **Card failure** | Retry → backup card → leader cover → flag for review |
 
-A partial approval is never issued. Either the full amount is approved with every member covered, or the transaction is declined entirely.
+There is no wallet preloading or ACH balance check. Funding is debit-only.
 
 ### 4. Leader Cover Fail-Safe
 
-To prevent embarrassing card declines when one member is temporarily short, Tally supports a **Leader Cover** system:
+To prevent embarrassing declines when a member's card fails at settlement:
 
-- Each group designates a **Group Leader** (typically the organizer)
-- If a member cannot cover their share at the moment of a swipe, the Leader's account automatically covers the gap
-- Tally records this as an internal **Social Debt** in the ledger
-- The shortfall member owes the Leader — tracked in-app, settled on their own timeline
+- Each group designates a **Group Leader**
+- Before an outing, the leader taps **Pre-authorize** in the app (valid for 24 hours)
+- If a member's primary and backup cards both fail at settlement, the leader's card covers the shortfall
+- An **IOU** is recorded in the ledger: the member owes the leader
+- The IOU is tracked in-app and can be marked settled when repaid out-of-band
 
-The card never declines due to one person's insufficient funds. The group always completes the purchase.
+The card never declines because of one member's card failure — leader cover ensures the group always completes the purchase.
 
 ### 5. The Double-Entry Ledger
 
-Every swipe produces an immutable accounting record using double-entry bookkeeping:
+Every swipe produces an immutable accounting record:
 
 ```
 Debit  → member's asset account      (member now owes their share)
@@ -113,84 +108,40 @@ Reversals (merchant refunds) create new offsetting entries — original records 
 ### Setting Up a Spending Circle
 
 1. **Create a Circle** — Give it a name ("Ski Trip 2026", "Shared Apartment") and currency
-2. **Add Members** — Invite friends; each member links their bank account via Plaid
-3. **Configure Splits** — Choose equal, percentage-based, or weighted splits (e.g., one person pays 2× because they're upgrading their room)
-4. **Designate a Leader** — The person whose account serves as the fail-safe backstop and owns the group's financial account
-5. **Issue Card Tokens** — Each member receives their own unique virtual card token, instantly added to their Apple/Google Wallet. Every token maps to the same group, so any member can initiate a purchase on behalf of the circle
+2. **Link a Debit Card** — Each member links their bank debit card via Stripe
+3. **Complete KYC** — Each member verifies their identity via Stripe Identity
+4. **Configure Splits** — Choose equal, percentage-based, or weighted splits
+5. **Designate a Leader** — The person who serves as the fail-safe backstop
+6. **Issue Card Tokens** — Each member receives their own virtual card token for Apple/Google Wallet
 
 ### Making a Purchase
 
 1. **Any member** taps their personal card token at a merchant
-2. Highnote sends an authorization webhook to Tally's backend with the token ID and charge amount
-3. Tally maps the token to the group and identifies all members
-4. Tally checks every member's balance in parallel — this takes ~50–100ms
-5. If approved, Highnote pulls the full amount from the Product Funding Account; Tally simultaneously triggers individual pulls from each member's funding source
-6. Every member sees the transaction appear in the app in real-time with their individual share, tagged with who initiated it
+2. Stripe sends an authorization webhook to Tally's backend
+3. Tally resolves the card token to the group and loads all members
+4. Tally writes PENDING ledger entries and responds APPROVE (~20ms)
+5. Stripe pays the merchant from Stripe's funds
+6. Settlement worker immediately charges each member's debit card
+7. All members see the transaction in-app with their individual share
 
-### When a Member Is Short
+### When a Member's Card Fails at Settlement
 
-**Option A — Direct Pull covers it:** If the member's Tally wallet is empty but their linked bank has enough, Tally automatically pulls the difference. The member doesn't need to do anything.
-
-**Option B — Leader Cover activates:** If the bank also can't cover the share, the Leader's account absorbs the shortfall. A Social Debt is created in the ledger. The member sees a notification and can repay the leader through the app at any time.
-
-**Option C — Transaction declines:** If the Leader also cannot cover, the transaction is declined and the card is returned to the merchant. No charges are applied to anyone.
-
-### Preloading a Wallet
-
-For trips or events where you want guaranteed authorization speed:
-
-1. Navigate to your Circle → **Load Wallet**
-2. Enter an amount to transfer from your linked bank
-3. Funds are available immediately in your Tally wallet
-4. Future purchases draw from the wallet first (no Plaid call needed at the register)
-
-### Viewing History
-
-- The **Circle feed** shows every transaction in real-time, each with individual member amounts and funding sources
-- Members can see whether their share came from their wallet or a direct bank pull
-- Social debts are tracked separately under **Owed to Leader**
+1. **Retry** — The settlement worker retries the primary card once
+2. **Backup card** — If retry fails, the backup card is charged
+3. **Leader Cover** — If both fail and the leader has pre-authorized, the leader's card covers the shortfall and an IOU is recorded
+4. **Flag for review** — If all paths fail, the funding pull is marked FAILED and ops is alerted
 
 ---
 
 ## Spending Configurations
 
-Tally supports three split modes, configurable per-circle:
-
 | Mode | How It Works | Example |
 |------|-------------|---------|
 | **Equal** | Total ÷ number of members | 4 people, $100 dinner → $25 each |
-| **Percentage** | Fixed percentages set per member | Alice 50%, Bob 25%, Carol 25% |
+| **Percentage** | Fixed percentages per member | Alice 50%, Bob 25%, Carol 25% |
 | **Weighted** | Fractional multipliers | Bob has 2× weight → pays double Alice's share |
 
-Split weights are stored as 6-decimal-precision fractions (e.g., `0.250000`). The sum of all weights in a group must equal `1.000000`.
-
----
-
-## Card Tokens
-
-Each member in a circle receives their own unique virtual card token via Highnote. Tokens are digital cards added to Apple/Google Wallet — no physical plastic required for the proxy model.
-
-| Property | Description |
-|----------|-------------|
-| **Token ID** | Highnote's unique identifier for the digital wallet token |
-| **User ID** | The Tally user who owns this phone/token |
-| **Group ID** | The circle this token is currently acting for |
-
-A single member can hold tokens across multiple circles. Tokens can be individually frozen, rate-limited, or revoked without affecting other group members.
-
----
-
-## Comparison
-
-| Feature | Splitwise / Tab | Venmo / Cash App | **Tally** |
-|---------|----------------|-----------------|-----------|
-| Payment Timing | Manual (post-event) | Manual (post-event) | **Real-time (at swipe)** |
-| Who Fronts? | One person fronts 100% | One person fronts 100% | **Nobody** |
-| Card Issuer | No | No | **Yes** |
-| Bank Integration | No | Limited | **Plaid (read) + ACH (write)** |
-| Fail-Safe | None | None | **Leader Cover** |
-| Automation | Low | Low | **High (JIT Engine)** |
-| Ledger | No | No | **Double-entry, immutable** |
+Split weights are stored as 6-decimal-precision fractions (e.g. `0.250000`). The sum of all weights in a group must equal `1.000000`.
 
 ---
 
@@ -210,26 +161,31 @@ Tally/
 
 | Layer | Technology | Rationale |
 |-------|-----------|-----------|
-| Language | Go 1.22 | Goroutines make parallel bank checks trivial; deterministic latency |
+| Language | Go 1.23 | Goroutines for concurrent ledger writes; deterministic latency |
 | HTTP | Gin | High-performance routing with composable middleware |
 | Database | PostgreSQL 16 | ACID + serializable transactions for ledger integrity |
 | Cache / Lock | Redis 7 | Sub-millisecond idempotency checks and distributed locking |
-| Card Processor | Highnote | Card issuance and authorization webhooks |
-| Bank Data | Plaid | Balance verification and ACH pull authorization |
+| Card Issuing | Stripe Issuing | Virtual card issuance; Apple/Google Wallet provisioning; JIT webhooks |
+| Debit Charging | Stripe PaymentIntents | Settlement charges against linked debit cards |
+| Bank Linking | Stripe Financial Connections | Debit card attachment via SetupIntent flow |
+| Identity / KYC | Stripe Identity | Document verification before card issuance |
+| Auth | Clerk | RS256 JWT for user-facing routes |
 | Migrations | golang-migrate | SQL embedded in binary; auto-runs on boot |
 | Containers | Docker Compose | Single command brings up the full local stack |
 
 ### Key Design Decisions
 
-**Why Go?** The JIT authorization handler fans out one goroutine per group member to check balances simultaneously. In Python or Node, you'd need async/await gymnastics. In Go, `sync.WaitGroup` + goroutines is idiomatic and the concurrency model is trivially correct.
+**JIT is Postgres-only.** The authorization handler makes zero external API calls. All data needed to approve or decline is stored in Postgres. This is how the 2-second Stripe window is met with a 40× margin.
 
-**Why PostgreSQL with SERIALIZABLE isolation?** Two simultaneous swipes for the same group could race to read member balances and both approve, double-spending. `SERIALIZABLE` isolation causes one transaction to abort and retry, preventing phantom reads without application-level locking.
+**Debit required before joining.** Every member must link a debit card (`stripe_payment_method_id`) before they can be added to a group. This invariant means JIT can always approve — there are no missing cards to discover at swipe time.
 
-**Why integer cents?** Floating-point arithmetic on money causes rounding errors that compound across a ledger. All amounts are stored as `BIGINT` cents. `$25.99` is stored as `2599`.
+**Leader cover lives at settlement, not JIT.** Since all members have cards, JIT always approves. Leader cover fires in the settlement worker when a member's card actually declines — exactly where the failure occurs.
 
-**Why Redis for idempotency instead of just the DB?** The database's `UNIQUE(idempotency_key)` is the backstop, but a DB constraint requires a round-trip and produces a hard error. Redis catches duplicates before the handler runs — returning the cached response in microseconds without touching Postgres.
+**Integer cents everywhere.** All monetary amounts are stored as `BIGINT` cents. `$25.99` is stored as `2599`. No floating-point rounding errors.
 
-**Why double-entry?** It makes the ledger self-auditing. If debits ≠ credits, something is wrong. It also enables clean reversals: a refund is just new offsetting entries rather than mutations to existing rows.
+**Two webhook signature schemes.** `/v1/auth/jit` uses a custom HMAC-SHA256 scheme. `/v1/webhooks/stripe/*` uses Stripe's native `stripe.ConstructEvent()` with a timestamp to prevent replay attacks.
+
+**Redis idempotency + DB backstop.** The Redis cache returns cached responses in microseconds for retry requests. The database `UNIQUE(idempotency_key)` constraint is a final backstop if Redis is unavailable.
 
 ---
 
@@ -238,36 +194,38 @@ Tally/
 ### Prerequisites
 
 - Docker Desktop
-- Go 1.22+
+- Go 1.23+
 
 ### Run Locally
 
 ```bash
 cd backend
 
-# Install dependencies
-go mod tidy
+# Copy and configure environment
+cp .env.example .env
+# Edit .env — WEBHOOK_SECRET is required; Stripe keys optional (mock clients used if unset)
 
-# Start the full stack (Postgres + Redis + App + pgAdmin)
+# Start the full stack (Postgres + Redis + App)
 docker compose up --build
 ```
 
 The API is available at `http://localhost:8080`.
 Swagger UI (interactive docs) is at `http://localhost:8080/swagger/index.html`.
-pgAdmin is at `http://localhost:5050` (email: `admin@tally.local`, password: `admin`).
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | `postgres://tally:tally_secret@localhost:5432/tally?sslmode=disable` | Postgres connection string |
-| `REDIS_URL` | `redis://localhost:6379` | Redis URL |
-| `WEBHOOK_SECRET` | `dev_webhook_secret_change_in_prod` | HMAC secret for JIT auth endpoint |
-| `HIGHNOTE_WEBHOOK_SECRET` | `3ac94708bea182cb1bc6503fccff3347` | HMAC secret for Highnote webhooks |
-| `PORT` | `8080` | HTTP listen port |
-| `ENV` | `development` | Set to `production` for Gin release mode |
-| `PLAID_CLIENT_ID` | *(empty)* | Leave empty to use the mock Plaid client |
-| `PLAID_SECRET` | *(empty)* | Leave empty to use the mock Plaid client |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | Postgres connection string |
+| `REDIS_URL` | Yes | Redis URL |
+| `WEBHOOK_SECRET` | Yes | HMAC secret for `/v1/auth/jit` signature verification |
+| `STRIPE_SECRET_KEY` | No | Stripe API key — leave empty to use mock clients |
+| `STRIPE_WEBHOOK_SECRET` | No | Stripe webhook signing secret for `/v1/webhooks/stripe/*` |
+| `STRIPE_ISSUING_CARD_PRODUCT` | No | Stripe Issuing card product ID |
+| `CLERK_JWKS_URL` | No | Clerk JWKS URL — leave empty to use dev auth bypass |
+| `DEV_USER_ID` | No | User ID injected by dev auth bypass (default: `dev-user-local`) |
+| `PORT` | No | HTTP listen port (default: `8080`) |
+| `ENV` | No | `development` or `production` |
 
 ---
 
@@ -276,38 +234,50 @@ pgAdmin is at `http://localhost:5050` (email: `admin@tally.local`, password: `ad
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/healthz` | Health check |
-| `POST` | `/v1/groups` | Create a spending circle |
-| `GET` | `/v1/groups/:id` | Get group with members |
+| `POST` | `/v1/users/me` | Create or update the authenticated user |
+| `POST` | `/v1/users/me/kyc` | Start a Stripe Identity KYC session |
+| `POST` | `/v1/users/me/payment-method` | Create a SetupIntent to link a primary debit card |
+| `POST` | `/v1/users/me/payment-method/confirm` | Save the linked primary debit card |
+| `POST` | `/v1/users/me/payment-method/backup` | Create a SetupIntent to link a backup debit card |
+| `POST` | `/v1/users/me/payment-method/backup/confirm` | Save the linked backup debit card |
+| `POST` | `/v1/groups` | Create a spending group |
+| `GET` | `/v1/groups` | List groups the authenticated user belongs to |
+| `GET` | `/v1/groups/:id` | Get group details and members |
 | `POST` | `/v1/groups/:id/members` | Add a member to a group |
 | `GET` | `/v1/groups/:id/transactions` | List recent transactions |
-| `POST` | `/v1/cards/issue` | Issue a virtual card token to a member |
-| `POST` | `/v1/wallets/load` | Pre-load a member's Tally wallet |
-| `POST` | `/v1/auth/jit` | JIT authorization (called by card processor) |
-| `POST` | `/v1/webhooks/highnote/authorization` | Highnote authorization webhook |
+| `GET` | `/v1/groups/:id/transactions/:txnId` | Get transaction detail with per-member splits |
+| `GET` | `/v1/groups/:id/ious` | List outstanding IOUs in the group |
+| `POST` | `/v1/groups/:id/ious/:iouId/settle` | Mark an IOU as settled |
+| `POST` | `/v1/groups/:id/leader/authorize` | Leader pre-authorizes cover for the next 24 hours |
+| `DELETE` | `/v1/groups/:id/leader/authorize` | Leader revokes pre-authorization |
+| `GET` | `/v1/groups/:id/leader/authorize` | Get leader pre-authorization status |
+| `POST` | `/v1/cards/issue` | Issue a virtual card to a member (KYC required) |
+| `POST` | `/v1/auth/jit` | JIT authorization endpoint (called by card processor) |
+| `POST` | `/v1/webhooks/stripe/issuing-authorization` | Stripe Issuing authorization webhook |
+| `POST` | `/v1/webhooks/stripe/reversal` | Stripe reversal/refund webhook |
+| `POST` | `/v1/webhooks/stripe/identity` | Stripe Identity KYC result webhook |
 
 Full request/response examples: see [backend/TESTING.md](backend/TESTING.md).
 Full backend technical writeup: see [backend/BACKEND.md](backend/BACKEND.md).
 
 ### Security
 
-All requests to `/v1/auth/jit` and Highnote webhook endpoints require an HMAC-SHA256 signature:
+**User-facing routes** (`/v1/groups/*`, `/v1/cards/*`, `/v1/users/*`) require a Clerk JWT in the `Authorization: Bearer <token>` header. In local development with `CLERK_JWKS_URL` unset, `DEV_USER_ID` is injected automatically.
 
+**JIT endpoint** (`/v1/auth/jit`) requires an HMAC-SHA256 signature:
 ```
-X-Tally-Signature: sha256=<hex(HMAC-SHA256(secret, rawBody))>
+X-Tally-Signature: sha256=<hex(HMAC-SHA256(WEBHOOK_SECRET, rawBody))>
 ```
 
-The middleware uses constant-time comparison (`hmac.Equal`) to prevent timing-oracle attacks. Unsigned requests receive `401` and never reach the handler.
+**Stripe webhook endpoints** (`/v1/webhooks/stripe/*`) use Stripe's native signature scheme verified via `stripe.ConstructEvent()`.
 
 ---
 
 ## What's Next
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Real Plaid integration | Mock only | Swap `NewMockClient()` for the Plaid Go SDK |
-| Settlement worker | Not wired | Async worker to call `SettleTransaction()` on ACH confirmation |
-| Reversal webhook | Logic exists | Needs `/v1/webhooks/reversal` endpoint |
-| User authentication | None yet | JWT or session middleware for iOS client |
-| Wallet top-up from iOS | API ready | iOS UI not yet connected |
-| Leader Cover logic | Designed | Not yet implemented in JIT handler |
-| Spending analytics | Planned | Per-member and per-circle spend summaries |
+| Feature | Status |
+|---------|--------|
+| Push notifications (APNS/FCM) | Planned |
+| Stripe PM background validity refresh | Planned |
+| Spending analytics per member / per group | Planned |
+| iOS UI for all new endpoints | In progress |

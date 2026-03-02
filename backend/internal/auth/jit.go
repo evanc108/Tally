@@ -2,18 +2,15 @@
 //
 // Flow overview:
 //  1. Card processor → POST /v1/auth/jit  (HMAC-verified, idempotent)
-//  2. Resolve card_token → group + all member rows
-//  3. Fan out Goroutines → parallel Plaid balance checks (primary + secondary bank)
-//  4. Build funding plan  → 5-tier fallback waterfall
-//  5. If every member can contribute something → APPROVE + post PENDING ledger entries
-//  6. Otherwise                                → DECLINE
+//  2. Resolve card_token → group + all member rows  (Postgres, single query)
+//  3. Verify every member has a stripe_payment_method_id  (data integrity check)
+//  4. Build funding plan  → direct_pull for every member
+//  5. Post PENDING ledger entries atomically
+//  6. Respond APPROVE (or DECLINE if any step fails)
 //
-// Funding waterfall (per member):
-//   Tier 1 — tally_balance (internal wallet)
-//   Tier 2 — primary bank pull (direct_pull via Plaid)
-//   Tier 3 — secondary / backup bank pull (secondary_bank via Plaid)
-//   Tier 4 — leader overwrite: the pre-authorised leader covers the shortfall + IOU
-//   Tier 5 — partial auth: approve only what is actually available
+// No external API calls are made in this handler. All data needed for the
+// authorization decision is in Postgres. The 2-second Stripe deadline is met
+// with a 40× safety margin (~20–50 ms actual latency).
 package auth
 
 import (
@@ -28,13 +25,13 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/tally/backend/internal/config"
 	"github.com/tally/backend/internal/ledger"
-	"github.com/tally/backend/internal/plaid"
 	"github.com/tally/backend/internal/waterfall"
 )
 
-// jitTimeout is the total budget for a JIT authorization — Plaid checks +
-// ledger write must complete before the card processor times out.
-const jitTimeout = 8 * time.Second
+// jitTimeout is the total budget for a JIT authorization. With Postgres-only
+// logic (~20–50 ms), this leaves a 30× safety margin inside Stripe's 2-second
+// window.
+const jitTimeout = 1500 * time.Millisecond
 
 // ── Request / Response ────────────────────────────────────────────────────────
 
@@ -52,35 +49,28 @@ type JITRequest struct {
 
 // JITResponse is returned to the card processor.
 type JITResponse struct {
-	Decision            string `json:"decision"`                        // "APPROVE" | "DECLINE"
-	TransactionID       string `json:"transaction_id,omitempty"`        // populated on APPROVE
-	ApprovedAmountCents int64  `json:"approved_amount_cents,omitempty"` // < requested when partial
-	Reason              string `json:"reason,omitempty"`                // populated on DECLINE
+	Decision      string `json:"decision"`                  // "APPROVE" | "DECLINE"
+	TransactionID string `json:"transaction_id,omitempty"`  // populated on APPROVE
+	Reason        string `json:"reason,omitempty"`          // populated on DECLINE
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 // JITHandler handles POST /v1/auth/jit.
 type JITHandler struct {
-	db    *sql.DB
-	rdb   *redis.Client
-	plaid plaid.BalanceClient
-	cfg   *config.Config
+	db  *sql.DB
+	rdb *redis.Client
+	cfg *config.Config
 }
 
-func NewJITHandler(db *sql.DB, rdb *redis.Client, cfg *config.Config, pl plaid.BalanceClient) *JITHandler {
-	return &JITHandler{
-		db:    db,
-		rdb:   rdb,
-		plaid: pl,
-		cfg:   cfg,
-	}
+func NewJITHandler(db *sql.DB, rdb *redis.Client, cfg *config.Config) *JITHandler {
+	return &JITHandler{db: db, rdb: rdb, cfg: cfg}
 }
 
 // Authorize is the core JIT authorization logic.
 //
 // @Summary      JIT card authorization
-// @Description  Generic card-processor JIT authorization endpoint. Runs the 5-tier funding waterfall and returns APPROVE or DECLINE. Requires X-Tally-Signature and Idempotency-Key headers.
+// @Description  Generic card-processor JIT authorization endpoint. Verifies all members have a linked payment method and writes PENDING ledger entries. Returns APPROVE or DECLINE. Requires X-Tally-Signature and Idempotency-Key headers.
 // @Tags         auth
 // @Accept       json
 // @Produce      json
@@ -107,7 +97,6 @@ func (h *JITHandler) Authorize(c *gin.Context) {
 	groupID, members, groupAccountID, err := waterfall.ResolveCard(ctx, h.db, req.CardToken)
 	if err != nil {
 		log.ErrorContext(ctx, "card resolution failed", "error", err)
-		// Use a generic reason to avoid leaking whether a given card token exists.
 		c.JSON(http.StatusUnprocessableEntity, JITResponse{Decision: "DECLINE", Reason: "authorization_failed"})
 		return
 	}
@@ -120,24 +109,19 @@ func (h *JITHandler) Authorize(c *gin.Context) {
 		return
 	}
 
-	// ── Step 3: Parallel Plaid balance checks (primary + secondary) ───────────
-	balances := waterfall.ParallelBalanceCheck(ctx, h.plaid, members)
-
-	// ── Step 4: 5-tier funding waterfall ──────────────────────────────────────
-	splits, ious, approvedCents, planErr := waterfall.BuildFundingPlan(balances, req.AmountCents)
-	if planErr != nil || approvedCents == 0 {
-		reason := "insufficient_funds"
-		if planErr != nil {
-			log.ErrorContext(ctx, "funding plan error", "error", planErr)
-			reason = "balance_check_error"
-		}
+	// ── Step 3: Build direct_pull funding plan for every member ──────────────
+	// BuildFundingPlan returns an error if any member is missing a payment
+	// method — enforced at join time, so this is a data-integrity assertion.
+	splits, err := waterfall.BuildFundingPlan(members, req.AmountCents)
+	if err != nil {
+		log.ErrorContext(ctx, "funding plan failed", "error", err)
 		_ = h.setTransactionStatus(ctx, txnID, "DECLINED")
-		c.JSON(http.StatusOK, JITResponse{Decision: "DECLINE", Reason: reason})
+		c.JSON(http.StatusOK, JITResponse{Decision: "DECLINE", Reason: "card_not_linked"})
 		return
 	}
 
-	// ── Step 5: Atomically post PENDING journal entries ───────────────────────
-	if err := ledger.PostPendingTransaction(ctx, h.db, txnID, groupAccountID, splits, ious); err != nil {
+	// ── Step 4: Atomically post PENDING journal entries ───────────────────────
+	if err := ledger.PostPendingTransaction(ctx, h.db, txnID, groupAccountID, splits, nil); err != nil {
 		log.ErrorContext(ctx, "ledger post failed", "error", err)
 		_ = h.setTransactionStatus(ctx, txnID, "DECLINED")
 		c.JSON(http.StatusInternalServerError, JITResponse{Decision: "DECLINE", Reason: "ledger_error"})
@@ -146,21 +130,14 @@ func (h *JITHandler) Authorize(c *gin.Context) {
 
 	log.InfoContext(ctx, "JIT approved",
 		"transaction_id", txnID,
-		"requested_cents", req.AmountCents,
-		"approved_cents", approvedCents,
-		"iou_count", len(ious),
+		"amount_cents", req.AmountCents,
+		"member_count", len(members),
 	)
 
-	resp := JITResponse{
+	c.JSON(http.StatusOK, JITResponse{
 		Decision:      "APPROVE",
 		TransactionID: txnID.String(),
-	}
-	// Only set ApprovedAmountCents when it differs from the requested amount
-	// (i.e., a partial auth occurred).
-	if approvedCents < req.AmountCents {
-		resp.ApprovedAmountCents = approvedCents
-	}
-	c.JSON(http.StatusOK, resp)
+	})
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
