@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/tally/backend/internal/config"
+	"github.com/tally/backend/internal/middleware"
 	"github.com/tally/backend/internal/stripeissuing"
 )
 
@@ -38,10 +39,15 @@ func NewHandler(
 // ── POST /v1/cards/issue ─────────────────────────────────────────────────────
 
 type issueCardRequest struct {
-	MemberID  string `json:"member_id"  binding:"required"`
-	FirstName string `json:"first_name" binding:"required"`
-	LastName  string `json:"last_name"  binding:"required"`
-	Email     string `json:"email"      binding:"required"`
+	MemberID     string `json:"member_id"     binding:"required"`
+	FirstName    string `json:"first_name"    binding:"required"`
+	LastName     string `json:"last_name"     binding:"required"`
+	Email        string `json:"email"         binding:"required"`
+	AddressLine1 string `json:"address_line1"`
+	City         string `json:"city"`
+	State        string `json:"state"`
+	PostalCode   string `json:"postal_code"`
+	Country      string `json:"country"`
 }
 
 type issueCardResponse struct {
@@ -51,7 +57,8 @@ type issueCardResponse struct {
 }
 
 // IssueCard creates a Stripe Issuing cardholder and virtual card for a member.
-// Requires the member to have passed KYC (kyc_status = 'approved').
+// Requires the member to have passed KYC (kyc_status = 'approved') and to be
+// owned by the authenticated user.
 //
 // @Summary      Issue a virtual card
 // @Description  Creates a Stripe Issuing cardholder and virtual card for a member. KYC approval is required.
@@ -79,13 +86,25 @@ func (h *Handler) IssueCard(c *gin.Context) {
 		return
 	}
 
+	// Ownership check: the authenticated user must own this member row.
+	callerID, ok := c.Get(middleware.ClerkUserIDKey)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
+		return
+	}
+	userID, ok := callerID.(string)
+	if !ok || userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(c.Request.Context(), issueCardTimeout)
 	defer cancel()
 
-	// Gate on KYC approval before issuing a card.
+	// Gate on KYC approval and ownership before issuing a card.
 	var kycStatus string
 	err = h.db.QueryRowContext(ctx,
-		`SELECT kyc_status FROM members WHERE id = $1`, memberID,
+		`SELECT kyc_status FROM members WHERE id = $1 AND user_id = $2`, memberID, userID,
 	).Scan(&kycStatus)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
@@ -104,10 +123,15 @@ func (h *Handler) IssueCard(c *gin.Context) {
 
 	// 1. Create cardholder in Stripe Issuing.
 	cardholderID, err := h.issuing.CreateCardholder(ctx, stripeissuing.CreateCardholderRequest{
-		ExternalID: memberID.String(),
-		FirstName:  req.FirstName,
-		LastName:   req.LastName,
-		Email:      req.Email,
+		ExternalID:   memberID.String(),
+		FirstName:    req.FirstName,
+		LastName:     req.LastName,
+		Email:        req.Email,
+		AddressLine1: req.AddressLine1,
+		City:         req.City,
+		State:        req.State,
+		PostalCode:   req.PostalCode,
+		Country:      req.Country,
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "CreateCardholder failed", "member_id", memberID, "error", err)
@@ -123,24 +147,30 @@ func (h *Handler) IssueCard(c *gin.Context) {
 		return
 	}
 
-	// 3. Persist to the members row.
-	const q = `
-		UPDATE members
-		SET stripe_cardholder_id = $1,
-		    stripe_card_id       = $2,
-		    card_token           = $3,
-		    updated_at           = NOW()
-		WHERE id = $4
+	// 3. Persist: INSERT into cards (trigger syncs to members.card_token for JIT).
+	// If the cards table does not exist (older migrations only), fall back to UPDATE members.
+	const insertCards = `
+		INSERT INTO cards (member_id, user_id, card_token, stripe_cardholder_id, stripe_card_id, status, is_primary)
+		VALUES ($1, $2, $3, $4, $5, 'active', TRUE)
 	`
-	res, err := h.db.ExecContext(ctx, q, cardholderID, cardID, cardToken, memberID)
+	_, err = h.db.ExecContext(ctx, insertCards, memberID, userID, cardToken, cardholderID, cardID)
 	if err != nil {
-		slog.ErrorContext(ctx, "update member card IDs failed", "member_id", memberID, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
-		return
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
-		return
+		// Fallback: update members directly (pre-000015 schema or trigger missing).
+		const updateMembers = `
+			UPDATE members
+			SET stripe_cardholder_id = $1, stripe_card_id = $2, card_token = $3, updated_at = NOW()
+			WHERE id = $4 AND user_id = $5
+		`
+		res, upErr := h.db.ExecContext(ctx, updateMembers, cardholderID, cardID, cardToken, memberID, userID)
+		if upErr != nil {
+			slog.ErrorContext(ctx, "card persist failed", "member_id", memberID, "error", err, "fallback_error", upErr)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+			return
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
+			return
+		}
 	}
 
 	slog.InfoContext(ctx, "card issued", "member_id", memberID, "card_id", cardID)

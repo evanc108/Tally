@@ -1,0 +1,12 @@
+DOWNTOWN GRILL
+Happy Hour Special
+
+Wagyu Burger           24.00
+Truffle Fries          12.00
+Craft Beer              8.00
+Craft Beer              8.00
+Happy Hour Discount    -4.00
+
+Subtotal               48.00
+Tax                     3.84
+Total                  51.84

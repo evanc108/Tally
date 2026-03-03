@@ -168,7 +168,14 @@ sign_body() {
 
 Any member's card token can initiate a purchase for the whole group.
 
+**Use the same `WEBHOOK_SECRET` as in `backend/.env`.** Avoid putting `# comments` on the same line as variable assignments when pasting into zsh, or the comment can be run as a command and the variable may not be set.
+
 ```bash
+# Set secret exactly as in backend/.env (no trailing comment on this line)
+WEBHOOK_SECRET="27d557ac4f56a640cb084c2d0c27dadcafe5032d94680f52647bbf6691d0b71a"
+BASE=http://localhost:8080
+sign_body() { printf '%s' "$1" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print "sha256="$2}'; }
+
 BODY=$(cat <<EOF
 {
   "idempotency_key": "txn-001",
@@ -189,6 +196,36 @@ curl -s -X POST $BASE/v1/auth/jit \
   -H "Idempotency-Key: txn-001" \
   -d "$BODY" | jq .
 ```
+
+**Full flow in one go** (so `GROUP_ID` and `TXN_ID` are set for later steps like GET transaction). Run from repo root; ensure `backend/.env` has the same `WEBHOOK_SECRET` and `DEV_USER_ID` (e.g. `dev-user-local`).
+
+```bash
+BASE=http://localhost:8080
+export WEBHOOK_SECRET=$(grep '^WEBHOOK_SECRET=' backend/.env | cut -d= -f2)
+sign_body() { printf '%s' "$1" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print "sha256="$2}'; }
+
+curl -s -X POST $BASE/v1/users/me -H "Content-Type: application/json" -d '{"clerk_user_id":"dev-user-local","email":"test@example.com","first_name":"Test","last_name":"User"}' > /dev/null
+GROUP=$(curl -s -X POST $BASE/v1/groups -H "Content-Type: application/json" -d '{"name":"jit-test","display_name":"JIT Test"}')
+GROUP_ID=$(echo "$GROUP" | jq -r '.group_id')
+MEMBER_ID=$(echo "$GROUP" | jq -r '.member_id')
+
+curl -s -X POST $BASE/v1/users/me/payment-method -H "Content-Type: application/json" > /dev/null
+curl -s -X POST $BASE/v1/users/me/payment-method/confirm -H "Content-Type: application/json" -d "{\"member_id\":\"$MEMBER_ID\",\"payment_method_id\":\"pm_mock_primary\"}" > /dev/null
+docker compose -f backend/docker-compose.yml exec -T postgres psql -U tally -d tally -c "UPDATE members SET kyc_status = 'approved' WHERE id = '$MEMBER_ID';" > /dev/null 2>&1
+
+CARD=$(curl -s -X POST $BASE/v1/cards/issue -H "Content-Type: application/json" -d "{\"member_id\":\"$MEMBER_ID\",\"first_name\":\"Test\",\"last_name\":\"User\",\"email\":\"test@example.com\"}")
+CARD_TOKEN=$(echo "$CARD" | jq -r '.card_token')
+
+IDEM_KEY="txn-$(date +%s)"
+BODY="{\"idempotency_key\":\"$IDEM_KEY\",\"card_token\":\"$CARD_TOKEN\",\"amount_cents\":10000,\"currency\":\"usd\",\"merchant_name\":\"The Steakhouse\",\"merchant_category\":\"5812\"}"
+SIG=$(sign_body "$BODY")
+JIT=$(curl -s -X POST $BASE/v1/auth/jit -H "Content-Type: application/json" -H "X-Tally-Signature: $SIG" -H "Idempotency-Key: $IDEM_KEY" -d "$BODY")
+echo "$JIT" | jq .
+TXN_ID=$(echo "$JIT" | jq -r '.transaction_id')
+echo "GROUP_ID=$GROUP_ID TXN_ID=$TXN_ID"
+```
+
+Then wait 35s and run: `curl -s $BASE/v1/groups/$GROUP_ID/transactions/$TXN_ID | jq .`
 
 Expected (200 OK):
 ```json
@@ -255,6 +292,37 @@ curl -s $BASE/v1/groups/$GROUP_ID/transactions/$TXN_ID | jq .
 ```
 
 Returns the transaction with per-member splits and any IOUs.
+
+---
+
+## 10b. Settlement test (30-second sweep)
+
+When you use `POST /v1/auth/jit` (not the Stripe webhook), settlement is **not** triggered immediately. The background worker sweeps for `APPROVED` transactions older than 30 seconds and runs settlement then. To verify settlement (mock “pull” from the dummy debit card):
+
+1. Run the full flow through JIT (user → group → debit card → KYC → issue card → JIT) so you have `TXN_ID` and `GROUP_ID`.
+2. Wait **35 seconds** for the sweep to pick up the transaction.
+3. Get the transaction detail; you should see `"status": "SETTLED"` and each split `"status": "COMPLETED"`.
+
+```bash
+# After JIT, wait for settlement sweep (30s interval)
+sleep 35
+
+curl -s $BASE/v1/groups/$GROUP_ID/transactions/$TXN_ID | jq .
+# Expect: status "SETTLED", splits[].status "COMPLETED"
+```
+
+With mock Stripe, the “debit card” is `pm_mock_primary` (from payment-method/confirm). The settlement worker calls the mock client, which returns success without a real charge. To test a **real** Stripe charge (test mode, no real money), set `STRIPE_SECRET_KEY` in `.env`, attach a test PaymentMethod (e.g. card `4242 4242 4242 4242` via Stripe.js or Stripe CLI), then run the same flow; settlement will create a real PaymentIntent against that card.
+
+**Verifying settlement and correct amounts**
+
+1. **Settlement ran** — `GET .../transactions/$TXN_ID` → `status` is `"SETTLED"` and every `splits[].status` is `"COMPLETED"`.
+2. **Right amounts per member** — Splits follow each member's `split_weight`. Single member: `splits[0].amount_cents` should equal the transaction `amount_cents`. Multiple members: sum of `splits[].amount_cents` must equal the transaction total, and each split = total × that member's split_weight (e.g. equal 4-way → 25% each).
+   ```bash
+   curl -s $BASE/v1/groups/$GROUP_ID/transactions/$TXN_ID | jq '{ total: .amount_cents, sum_splits: ([.splits[].amount_cents] | add), splits: [.splits[] | {display_name, amount_cents, status}] }'
+   ```
+   Check `sum_splits == total` and each split amount matches the expected share.
+3. **Real Stripe (test mode)** — With `STRIPE_SECRET_KEY` set and a real test PaymentMethod, after settlement check Stripe Dashboard → Payments (or `stripe payment_intents list`); the charged amount should match that member's split for that transaction.
+4. **DB (optional)** — Query `funding_pulls` and `journal_entries` to confirm amounts in SQL.
 
 ---
 

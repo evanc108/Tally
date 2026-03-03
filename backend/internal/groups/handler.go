@@ -55,7 +55,11 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	userID, _ := clerkUserID.(string)
+	userID, ok := clerkUserID.(string)
+	if !ok || userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
 
 	var req createGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -184,13 +188,17 @@ func (h *Handler) AddMember(c *gin.Context) {
 	if req.SplitWeight <= 0 {
 		req.SplitWeight = 0.25
 	}
+	if req.SplitWeight > 1.0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "split_weight must be between 0 and 1"})
+		return
+	}
 
 	// Use the provided user_id if given (leader adding someone else), otherwise
 	// default to the caller's own identity (self-join).
 	userID := req.UserID
 	if userID == "" {
-		callerID, _ := c.Get("clerk_user_id")
-		userID, _ = callerID.(string)
+		callerIDRaw, _ := c.Get("clerk_user_id")
+		userID, _ = callerIDRaw.(string)
 	}
 	if userID == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
@@ -288,8 +296,13 @@ type groupSummary struct {
 // @Failure      500 {object} map[string]string
 // @Router       /v1/groups [get]
 func (h *Handler) ListGroups(c *gin.Context) {
-	clerkUserID, ok := c.Get("clerk_user_id")
+	clerkUserIDRaw, ok := c.Get("clerk_user_id")
 	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	clerkUserID, ok := clerkUserIDRaw.(string)
+	if !ok || clerkUserID == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -615,8 +628,16 @@ type leaderAuthResponse struct {
 // @Failure      403 {object} map[string]string
 // @Router       /v1/groups/{id}/leader/authorize [post]
 func (h *Handler) SetLeaderAuthorization(c *gin.Context) {
-	memberID, _ := c.Get("member_id")
-	mid, _ := memberID.(string)
+	memberIDRaw, ok := c.Get("member_id")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	mid, ok := memberIDRaw.(string)
+	if !ok || mid == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
 
 	_, err := h.db.ExecContext(c.Request.Context(), `
 		UPDATE members
@@ -644,8 +665,16 @@ func (h *Handler) SetLeaderAuthorization(c *gin.Context) {
 // @Success      200 {object} leaderAuthResponse
 // @Router       /v1/groups/{id}/leader/authorize [delete]
 func (h *Handler) ClearLeaderAuthorization(c *gin.Context) {
-	memberID, _ := c.Get("member_id")
-	mid, _ := memberID.(string)
+	memberIDRaw, ok := c.Get("member_id")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	mid, ok := memberIDRaw.(string)
+	if !ok || mid == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
 
 	_, err := h.db.ExecContext(c.Request.Context(), `
 		UPDATE members
@@ -701,6 +730,13 @@ func (h *Handler) GetLeaderAuthorization(c *gin.Context) {
 			s := expiresAt.Format(time.RFC3339)
 			resp.ExpiresAt = &s
 		} else {
+			// Auth window has elapsed — clear the flag in DB so future queries
+			// don't load an expired authorization (e.g. in settlement worker).
+			h.db.ExecContext(c.Request.Context(), `
+				UPDATE members
+				SET leader_pre_authorized = false, updated_at = NOW()
+				WHERE group_id = $1 AND is_leader = true AND leader_pre_authorized = true`,
+				groupID) //nolint:errcheck
 			resp.PreAuthorized = false
 		}
 	}
@@ -794,8 +830,16 @@ func (h *Handler) SettleIOU(c *gin.Context) {
 		return
 	}
 
-	callerMemberID, _ := c.Get("member_id")
-	mid, _ := callerMemberID.(string)
+	callerMemberIDRaw, ok := c.Get("member_id")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	mid, ok := callerMemberIDRaw.(string)
+	if !ok || mid == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
 
 	// Verify the caller is the debtor or creditor.
 	var debtorID, creditorID string

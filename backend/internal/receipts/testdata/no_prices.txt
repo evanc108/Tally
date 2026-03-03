@@ -1,0 +1,11 @@
+RESTAURANT NAME
+123 Main Street
+Anytown, USA 12345
+Phone: (555) 123-4567
+
+Table 5
+Server: Alex
+Date: 03/01/2026
+
+Thank you for visiting!
+Please come again soon.

@@ -7,11 +7,13 @@
 package webhooks
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -20,20 +22,22 @@ import (
 	"github.com/tally/backend/internal/config"
 	"github.com/tally/backend/internal/ledger"
 	"github.com/tally/backend/internal/settlement"
+	"github.com/tally/backend/internal/stripeissuing"
 	"github.com/tally/backend/internal/stripepayment"
 	"github.com/tally/backend/internal/waterfall"
 )
 
 // StripeHandler handles all incoming Stripe webhook events.
 type StripeHandler struct {
-	db     *sql.DB
-	stripe stripepayment.PaymentClient
-	cfg    *config.Config
+	db      *sql.DB
+	stripe  stripepayment.PaymentClient
+	issuing stripeissuing.CardIssuingClient
+	cfg     *config.Config
 }
 
 // NewStripeHandler wires dependencies.
-func NewStripeHandler(db *sql.DB, stripeClient stripepayment.PaymentClient, cfg *config.Config) *StripeHandler {
-	return &StripeHandler{db: db, stripe: stripeClient, cfg: cfg}
+func NewStripeHandler(db *sql.DB, stripeClient stripepayment.PaymentClient, issuingClient stripeissuing.CardIssuingClient, cfg *config.Config) *StripeHandler {
+	return &StripeHandler{db: db, stripe: stripeClient, issuing: issuingClient, cfg: cfg}
 }
 
 // ── POST /v1/webhooks/stripe/issuing-authorization ────────────────────────────
@@ -71,7 +75,10 @@ func (h *StripeHandler) HandleIssuingAuthorization(c *gin.Context) {
 	groupID, members, groupAccountID, err := waterfall.ResolveCard(ctx, h.db, cardToken)
 	if err != nil {
 		slog.Error("issuing webhook: card resolution failed", "card_id", cardToken, "error", err)
-		c.JSON(http.StatusOK, gin.H{"received": true}) // return 200 so Stripe doesn't retry
+		if decErr := h.issuing.DeclineAuthorization(ctx, auth.ID); decErr != nil {
+			slog.Error("issuing webhook: DeclineAuthorization failed", "auth_id", auth.ID, "error", decErr)
+		}
+		c.JSON(http.StatusOK, gin.H{"received": true})
 		return
 	}
 
@@ -90,6 +97,9 @@ func (h *StripeHandler) HandleIssuingAuthorization(c *gin.Context) {
 		cardToken,
 	); err != nil {
 		slog.Error("issuing webhook: insert transaction failed", "error", err)
+		if decErr := h.issuing.DeclineAuthorization(ctx, auth.ID); decErr != nil {
+			slog.Error("issuing webhook: DeclineAuthorization failed", "auth_id", auth.ID, "error", decErr)
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
 		return
 	}
@@ -98,6 +108,9 @@ func (h *StripeHandler) HandleIssuingAuthorization(c *gin.Context) {
 	if err != nil {
 		slog.Error("issuing webhook: funding plan failed", "error", err)
 		h.db.ExecContext(ctx, `UPDATE transactions SET status='DECLINED', updated_at=NOW() WHERE id=$1`, txnID) //nolint:errcheck
+		if decErr := h.issuing.DeclineAuthorization(ctx, auth.ID); decErr != nil {
+			slog.Error("issuing webhook: DeclineAuthorization failed", "auth_id", auth.ID, "error", decErr)
+		}
 		c.JSON(http.StatusOK, gin.H{"received": true})
 		return
 	}
@@ -105,13 +118,26 @@ func (h *StripeHandler) HandleIssuingAuthorization(c *gin.Context) {
 	if err := ledger.PostPendingTransaction(ctx, h.db, txnID, groupAccountID, splits, nil); err != nil {
 		slog.Error("issuing webhook: ledger post failed", "error", err)
 		h.db.ExecContext(ctx, `UPDATE transactions SET status='DECLINED', updated_at=NOW() WHERE id=$1`, txnID) //nolint:errcheck
+		if decErr := h.issuing.DeclineAuthorization(ctx, auth.ID); decErr != nil {
+			slog.Error("issuing webhook: DeclineAuthorization failed", "auth_id", auth.ID, "error", decErr)
+		}
 		c.JSON(http.StatusOK, gin.H{"received": true})
 		return
 	}
 
-	// Kick off settlement asynchronously.
+	// Approve the Stripe authorization — must happen before returning to Stripe.
+	if err := h.issuing.ApproveAuthorization(ctx, auth.ID); err != nil {
+		slog.Error("issuing webhook: ApproveAuthorization failed", "auth_id", auth.ID, "error", err)
+		// Ledger entries already written; log for manual reconciliation but
+		// don't reverse here — the sweep worker will settle or flag.
+	}
+
+	// Kick off settlement in a goroutine with its own background context so it
+	// isn't cancelled when the HTTP handler returns.
 	go func() {
-		if err := settlement.SettleApprovedTransaction(ctx, h.db, h.stripe, txnID); err != nil {
+		settleCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := settlement.SettleApprovedTransaction(settleCtx, h.db, h.stripe, txnID); err != nil {
 			slog.Error("async settlement failed", "transaction_id", txnID, "error", err)
 		}
 	}()

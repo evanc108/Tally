@@ -20,18 +20,18 @@ type IdentityClient interface {
 
 // ── Real client ───────────────────────────────────────────────────────────────
 
-type realClient struct {
-	secretKey string
-}
+// realClient has no fields — stripe.Key is set once at startup in NewRealClient.
+type realClient struct{}
 
 // NewRealClient returns an IdentityClient backed by the live Stripe Identity API.
+// stripe.Key is set once here; removing per-request global writes eliminates
+// the data race that occurs when multiple goroutines call stripe.Key = key.
 func NewRealClient(secretKey string) IdentityClient {
-	return &realClient{secretKey: secretKey}
+	stripe.Key = secretKey
+	return &realClient{}
 }
 
 func (c *realClient) CreateVerificationSession(ctx context.Context, memberID string) (string, string, error) {
-	stripe.Key = c.secretKey
-
 	params := &stripe.IdentityVerificationSessionParams{
 		Type: stripe.String(string(stripe.IdentityVerificationSessionTypeDocument)),
 	}
