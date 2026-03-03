@@ -17,8 +17,8 @@ struct WelcomeView: View {
             // Animated gradient background
             LinearGradient(
                 colors: gradientShift
-                    ? [Color(hex: 0x00B805), TallyColors.accentDark, Color(hex: 0x009504)]
-                    : [TallyColors.accent, TallyColors.accentDark],
+                    ? [Color(hex: 0x00B805), TallyColors.accent.opacity(0.7), Color(hex: 0x009504)]
+                    : [TallyColors.accent, TallyColors.accent.opacity(0.7)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -70,7 +70,7 @@ struct WelcomeView: View {
                     .foregroundStyle(.white.opacity(0.85))
                     .multilineTextAlignment(.center)
                     .lineSpacing(4)
-                    .padding(.horizontal, TallySpacing.space48)
+                    .padding(.horizontal, TallySpacing.xxxl)
                     .padding(.top, TallySpacing.md)
                     .offset(y: taglineVisible ? 0 : 16)
                     .opacity(taglineVisible ? 1 : 0)
@@ -282,7 +282,7 @@ private struct WelcomePrimaryButtonStyle: ButtonStyle {
             .foregroundStyle(TallyColors.accent)
             .frame(maxWidth: .infinity, minHeight: 56)
             .background(.white)
-            .clipShape(RoundedRectangle(cornerRadius: TallyRadius.xl))
+            .clipShape(RoundedRectangle(cornerRadius: TallySpacing.buttonCornerRadius))
             .shadow(color: .black.opacity(configuration.isPressed ? 0 : 0.1), radius: 12, y: 6)
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .animation(.spring(duration: 0.3, bounce: 0.3), value: configuration.isPressed)
@@ -297,9 +297,9 @@ private struct WelcomeSecondaryButtonStyle: ButtonStyle {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 56)
             .background(.white.opacity(configuration.isPressed ? 0.25 : 0.15))
-            .clipShape(RoundedRectangle(cornerRadius: TallyRadius.xl))
+            .clipShape(RoundedRectangle(cornerRadius: TallySpacing.buttonCornerRadius))
             .overlay(
-                RoundedRectangle(cornerRadius: TallyRadius.xl)
+                RoundedRectangle(cornerRadius: TallySpacing.buttonCornerRadius)
                     .stroke(.white.opacity(0.3), lineWidth: 1.5)
             )
             .scaleEffect(configuration.isPressed ? 0.96 : 1)

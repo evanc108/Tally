@@ -74,7 +74,7 @@ struct OnboardingContainerView: View {
             }
             .padding(.bottom, TallySpacing.xl)
         }
-        .background(TallyColors.white)
+        .background(TallyColors.bgPrimary)
         .onAppear {
             withAnimation(.easeOut(duration: 0.4).delay(0.1)) {
                 appeared = true
@@ -126,7 +126,7 @@ private struct OnboardingPageView: View {
                 .font(TallyFont.body)
                 .foregroundStyle(TallyColors.textSecondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, TallySpacing.space48)
+                .padding(.horizontal, TallySpacing.xxxl)
                 .offset(y: textVisible ? 0 : 14)
                 .opacity(textVisible ? 1 : 0)
 
@@ -191,7 +191,7 @@ private struct CircleIllustration: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(
                     LinearGradient(
-                        colors: [TallyColors.accent, TallyColors.accentDark],
+                        colors: [TallyColors.accent, TallyColors.accent.opacity(0.7)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -384,7 +384,7 @@ private struct SettleIllustration: View {
                     .foregroundStyle(TallyColors.accent)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
-                    .background(TallyColors.accentLight)
+                    .background(TallyColors.accent.opacity(0.15))
                     .clipShape(Capsule())
             }
             .offset(y: -30)
@@ -398,7 +398,7 @@ private struct SettleIllustration: View {
                 .overlay(
                     Text("A")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(TallyColors.accentDark)
+                        .foregroundStyle(TallyColors.accent.opacity(0.7))
                 )
                 .offset(x: -90, y: 70)
                 .opacity(cardsVisible ? 1 : 0)
@@ -409,7 +409,7 @@ private struct SettleIllustration: View {
                 .overlay(
                     Text("S")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(TallyColors.accentDark)
+                        .foregroundStyle(TallyColors.accent.opacity(0.7))
                 )
                 .offset(x: 90, y: 70)
                 .opacity(cardsVisible ? 1 : 0)
@@ -417,10 +417,10 @@ private struct SettleIllustration: View {
             // Settled badge
             Text("Settled \u{2713}")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(TallyColors.accentDark)
+                .foregroundStyle(TallyColors.accent.opacity(0.7))
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
-                .background(TallyColors.accentLight)
+                .background(TallyColors.accent.opacity(0.15))
                 .clipShape(Capsule())
                 .offset(y: 100)
                 .scaleEffect(settledVisible ? 1 : 0.5)
@@ -471,7 +471,7 @@ private struct PageIndicator: View {
         HStack(spacing: 6) {
             ForEach(0..<count, id: \.self) { index in
                 Capsule()
-                    .fill(index == current ? TallyColors.accent : TallyColors.border)
+                    .fill(index == current ? TallyColors.accent : TallyColors.divider)
                     .frame(width: index == current ? 24 : 8, height: 8)
             }
         }
@@ -489,7 +489,7 @@ private struct OnboardingButtonStyle: ButtonStyle {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 52)
             .background(TallyColors.accent)
-            .clipShape(RoundedRectangle(cornerRadius: TallyRadius.xl))
+            .clipShape(RoundedRectangle(cornerRadius: TallySpacing.buttonCornerRadius))
             .shadow(color: TallyColors.accent.opacity(configuration.isPressed ? 0 : 0.25), radius: 10, y: 5)
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .animation(.spring(duration: 0.3, bounce: 0.3), value: configuration.isPressed)

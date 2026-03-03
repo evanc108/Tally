@@ -14,7 +14,7 @@ struct TallyTextField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: TallySpacing.xs) {
             Text(label)
-                .font(TallyFont.small)
+                .font(TallyFont.caption)
                 .foregroundStyle(TallyColors.textSecondary)
 
             Group {
@@ -30,12 +30,12 @@ struct TallyTextField: View {
             .font(TallyFont.body)
             .padding(.horizontal, TallySpacing.md)
             .frame(height: 52)
-            .background(isFocused ? Color(hex: 0xE8F0FE) : TallyColors.white)
-            .clipShape(RoundedRectangle(cornerRadius: TallyRadius.lg))
+            .background(isFocused ? Color(hex: 0xE8F0FE) : TallyColors.bgPrimary)
+            .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
             .overlay(
-                RoundedRectangle(cornerRadius: TallyRadius.lg)
+                RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius)
                     .stroke(
-                        isFocused ? TallyColors.accent : TallyColors.border,
+                        isFocused ? TallyColors.accent : TallyColors.divider,
                         lineWidth: 1.5
                     )
             )
