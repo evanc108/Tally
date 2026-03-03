@@ -79,7 +79,7 @@ struct LoginView: View {
                     signInWithApple()
                 }
             }
-            .padding(.horizontal, TallySpacing.lg)
+            .padding(.horizontal, TallySpacing.screenPadding)
 
             Spacer()
 

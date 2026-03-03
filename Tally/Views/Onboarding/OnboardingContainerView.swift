@@ -126,7 +126,7 @@ private struct OnboardingPageView: View {
                 .font(TallyFont.body)
                 .foregroundStyle(TallyColors.textSecondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, TallySpacing.space48)
+                .padding(.horizontal, TallySpacing.xxxl)
                 .offset(y: textVisible ? 0 : 14)
                 .opacity(textVisible ? 1 : 0)
 
