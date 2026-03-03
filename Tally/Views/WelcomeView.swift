@@ -1,0 +1,308 @@
+import SwiftUI
+
+struct WelcomeView: View {
+    @Environment(AuthManager.self) private var authManager
+
+    @State private var iconVisible = false
+    @State private var logoVisible = false
+    @State private var taglineVisible = false
+    @State private var buttonsVisible = false
+    @State private var legalVisible = false
+    @State private var shimmerPhase: CGFloat = -1
+    @State private var iconFloat: Bool = false
+    @State private var gradientShift: Bool = false
+
+    var body: some View {
+        ZStack {
+            // Animated gradient background
+            LinearGradient(
+                colors: gradientShift
+                    ? [Color(hex: 0x00B805), TallyColors.accentDark, Color(hex: 0x009504)]
+                    : [TallyColors.accent, TallyColors.accentDark],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+            .onAppear {
+                withAnimation(.easeInOut(duration: 6).repeatForever(autoreverses: true)) {
+                    gradientShift = true
+                }
+            }
+
+            // Lighter green corner circles
+            CornerBlobs()
+                .ignoresSafeArea()
+
+            // Subtle floating particles
+            FloatingParticles()
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                Spacer()
+
+                // Icon with float animation
+                RoundedRectangle(cornerRadius: 24)
+                    .fill(.white.opacity(0.15))
+                    .stroke(.white.opacity(0.2), lineWidth: 1)
+                    .frame(width: 80, height: 80)
+                    .overlay(
+                        Image(systemName: "creditcard.fill")
+                            .font(.system(size: 32))
+                            .foregroundStyle(.white)
+                    )
+                    .offset(y: iconFloat ? -6 : 6)
+                    .scaleEffect(iconVisible ? 1 : 0.5)
+                    .opacity(iconVisible ? 1 : 0)
+
+                // Logo
+                Text("tally")
+                    .font(.system(size: 52, weight: .black))
+                    .foregroundStyle(.white)
+                    .tracking(-2)
+                    .padding(.top, TallySpacing.lg)
+                    .scaleEffect(logoVisible ? 1 : 0.8)
+                    .opacity(logoVisible ? 1 : 0)
+                    .blur(radius: logoVisible ? 0 : 6)
+
+                // Tagline
+                Text("Split expenses, share cards, and settle up instantly with friends.")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(4)
+                    .padding(.horizontal, TallySpacing.space48)
+                    .padding(.top, TallySpacing.md)
+                    .offset(y: taglineVisible ? 0 : 16)
+                    .opacity(taglineVisible ? 1 : 0)
+
+                Spacer()
+                Spacer()
+
+                // Buttons
+                VStack(spacing: TallySpacing.sm) {
+                    Button("Get Started") {
+                        authManager.showOnboarding()
+                    }
+                    .buttonStyle(WelcomePrimaryButtonStyle())
+                    .offset(y: buttonsVisible ? 0 : 30)
+                    .opacity(buttonsVisible ? 1 : 0)
+
+                    Button("I already have an account") {
+                        authManager.beginAuth(mode: .login)
+                    }
+                    .buttonStyle(WelcomeSecondaryButtonStyle())
+                    .offset(y: buttonsVisible ? 0 : 40)
+                    .opacity(buttonsVisible ? 1 : 0)
+                }
+                .padding(.horizontal, TallySpacing.lg)
+
+                // Legal
+                Text(legalText)
+                    .font(.system(size: 11))
+                    .multilineTextAlignment(.center)
+                    .padding(.top, TallySpacing.sm)
+                    .padding(.horizontal, TallySpacing.xl)
+                    .padding(.bottom, TallySpacing.xl)
+                    .opacity(legalVisible ? 1 : 0)
+            }
+        }
+        .onAppear { runEntranceAnimations() }
+    }
+
+    // MARK: - Staggered Entrance
+
+    private func runEntranceAnimations() {
+        // Reset
+        iconVisible = false; logoVisible = false; taglineVisible = false
+        buttonsVisible = false; legalVisible = false; iconFloat = false
+
+        withAnimation(.spring(duration: 0.7, bounce: 0.35).delay(0.1)) {
+            iconVisible = true
+        }
+        withAnimation(.spring(duration: 0.6, bounce: 0.2).delay(0.25)) {
+            logoVisible = true
+        }
+        withAnimation(.spring(duration: 0.5, bounce: 0.15).delay(0.4)) {
+            taglineVisible = true
+        }
+        withAnimation(.spring(duration: 0.6, bounce: 0.2).delay(0.55)) {
+            buttonsVisible = true
+        }
+        withAnimation(.easeOut(duration: 0.4).delay(0.75)) {
+            legalVisible = true
+        }
+        // Continuous float
+        withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true).delay(0.8)) {
+            iconFloat = true
+        }
+    }
+
+    private var legalText: AttributedString {
+        var text = AttributedString("By continuing, you agree to our Terms of Service and Privacy Policy")
+        text.foregroundColor = .white.withAlphaComponent(0.5)
+
+        if let range = text.range(of: "Terms of Service") {
+            text[range].foregroundColor = .white.withAlphaComponent(0.7)
+            text[range].underlineStyle = .single
+        }
+        if let range = text.range(of: "Privacy Policy") {
+            text[range].foregroundColor = .white.withAlphaComponent(0.7)
+            text[range].underlineStyle = .single
+        }
+        return text
+    }
+}
+
+// MARK: - Corner Blobs
+
+private struct CornerBlobs: View {
+    @State private var animate = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+
+            // Top-left blob
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [.white.opacity(0.14), .white.opacity(0)],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 180
+                    )
+                )
+                .frame(width: 360, height: 360)
+                .offset(x: -w * 0.35, y: -h * 0.08)
+                .offset(x: animate ? 8 : -8, y: animate ? 6 : -6)
+
+            // Top-right blob
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [.white.opacity(0.10), .white.opacity(0)],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 150
+                    )
+                )
+                .frame(width: 300, height: 300)
+                .offset(x: w * 0.55, y: -h * 0.05)
+                .offset(x: animate ? -6 : 6, y: animate ? 8 : -8)
+
+            // Mid-left blob
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [.white.opacity(0.08), .white.opacity(0)],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 140
+                    )
+                )
+                .frame(width: 280, height: 280)
+                .offset(x: -w * 0.25, y: h * 0.35)
+                .offset(x: animate ? 10 : -10)
+
+            // Bottom-right blob
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [.white.opacity(0.10), .white.opacity(0)],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 160
+                    )
+                )
+                .frame(width: 320, height: 320)
+                .offset(x: w * 0.5, y: h * 0.65)
+                .offset(x: animate ? -8 : 8, y: animate ? -6 : 6)
+
+            // Bottom-left accent
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [.white.opacity(0.06), .white.opacity(0)],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 120
+                    )
+                )
+                .frame(width: 240, height: 240)
+                .offset(x: -w * 0.15, y: h * 0.75)
+                .offset(y: animate ? -8 : 8)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 5).repeatForever(autoreverses: true)) {
+                animate = true
+            }
+        }
+    }
+}
+
+// MARK: - Floating Particles
+
+private struct FloatingParticles: View {
+    @State private var animate = false
+
+    var body: some View {
+        Canvas { context, size in
+            let particles: [(CGFloat, CGFloat, CGFloat)] = [
+                (0.15, 0.2, 4), (0.85, 0.15, 3), (0.3, 0.7, 5),
+                (0.7, 0.8, 3.5), (0.5, 0.45, 2.5), (0.1, 0.55, 3),
+                (0.9, 0.5, 4), (0.4, 0.1, 2), (0.6, 0.9, 3),
+            ]
+
+            for (xRatio, yRatio, radius) in particles {
+                let shift: CGFloat = animate ? 12 : -12
+                let x = xRatio * size.width + shift * (xRatio > 0.5 ? 1 : -1)
+                let y = yRatio * size.height + shift * (yRatio > 0.5 ? -1 : 1)
+                context.fill(
+                    Path(ellipseIn: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)),
+                    with: .color(.white.opacity(0.08))
+                )
+            }
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+                animate = true
+            }
+        }
+    }
+}
+
+// MARK: - Welcome-Specific Button Styles
+
+private struct WelcomePrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 16, weight: .bold))
+            .tracking(-0.2)
+            .foregroundStyle(TallyColors.accent)
+            .frame(maxWidth: .infinity, minHeight: 56)
+            .background(.white)
+            .clipShape(RoundedRectangle(cornerRadius: TallyRadius.xl))
+            .shadow(color: .black.opacity(configuration.isPressed ? 0 : 0.1), radius: 12, y: 6)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.spring(duration: 0.3, bounce: 0.3), value: configuration.isPressed)
+    }
+}
+
+private struct WelcomeSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 16, weight: .semibold))
+            .tracking(-0.2)
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, minHeight: 56)
+            .background(.white.opacity(configuration.isPressed ? 0.25 : 0.15))
+            .clipShape(RoundedRectangle(cornerRadius: TallyRadius.xl))
+            .overlay(
+                RoundedRectangle(cornerRadius: TallyRadius.xl)
+                    .stroke(.white.opacity(0.3), lineWidth: 1.5)
+            )
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.spring(duration: 0.3, bounce: 0.3), value: configuration.isPressed)
+    }
+}

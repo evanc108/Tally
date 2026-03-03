@@ -30,21 +30,37 @@ struct RootView: View {
     @Environment(Clerk.self) private var clerk
 
     var body: some View {
-        Group {
+        ZStack {
             switch authManager.state {
-            case .onboarding:
-                OnboardingContainerView()
             case .welcome:
                 WelcomeView()
+                    .transition(.move(edge: .leading).combined(with: .opacity.animation(.easeOut(duration: 0.15))))
+                    .zIndex(0)
+            case .onboarding:
+                OnboardingContainerView()
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing),
+                        removal: .move(edge: .trailing)
+                    ))
+                    .zIndex(1)
             case .authenticating:
                 AuthFlowView()
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing),
+                        removal: .move(edge: .trailing)
+                    ))
+                    .zIndex(2)
             case .authenticated:
                 ContentView()
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                        removal: .move(edge: .bottom).combined(with: .opacity)
+                    ))
+                    .zIndex(3)
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: authManager.state)
+        .animation(.easeInOut(duration: 0.35), value: authManager.state)
         .task {
-            // Skip to authenticated if Clerk already has an active session
             if clerk.session != nil {
                 authManager.completeAuth()
             }
