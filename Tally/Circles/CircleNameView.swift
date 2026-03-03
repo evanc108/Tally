@@ -32,26 +32,19 @@ struct CircleNameView: View {
                             Image(uiImage: photo)
                                 .resizable()
                                 .scaledToFill()
-                                .frame(width: 100, height: 100)
+                                .frame(width: 132, height: 132)
                                 .clipShape(Circle())
-                                .overlay(
-                                    Circle().stroke(TallyColors.divider, lineWidth: 1)
-                                )
-                                .overlay(alignment: .bottomTrailing) {
-                                    editBadge
-                                }
+                                .overlay(alignment: .bottomTrailing) { editBadge }
                         } else {
                             ZStack {
                                 Circle()
                                     .fill(TallyColors.bgSecondary)
-                                    .frame(width: 100, height: 100)
+                                    .frame(width: 132, height: 132)
                                 Image(systemName: "camera.fill")
-                                    .font(.system(size: 28))
+                                    .font(.system(size: 34))
                                     .foregroundStyle(TallyColors.textSecondary)
                             }
-                            .overlay(alignment: .bottomTrailing) {
-                                plusBadge
-                            }
+                            .overlay(alignment: .bottomTrailing) { plusBadge }
                         }
                     }
                     .frame(maxWidth: .infinity)
@@ -66,18 +59,18 @@ struct CircleNameView: View {
                     ZStack(alignment: .leading) {
                         if state.circleName.isEmpty {
                             Text(placeholders[placeholderIndex])
-                                .font(.system(size: 17))
+                                .font(TallyFont.body)
                                 .foregroundStyle(TallyColors.textSecondary.opacity(0.5))
                                 .animation(.easeInOut(duration: 0.3), value: placeholderIndex)
                         }
                         TextField("", text: $state.circleName)
-                            .font(.system(size: 17))
+                            .font(TallyFont.body)
                             .foregroundStyle(TallyColors.textPrimary)
                     }
-                    .frame(height: 50)
+                    .frame(height: TallySpacing.inputHeight)
                     .padding(.horizontal, TallySpacing.lg)
                     .background(TallyColors.bgSecondary)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardInnerRadius))
                     .padding(.top, TallySpacing.xl)
                 }
                 .padding(.horizontal, TallySpacing.screenPadding)
@@ -99,7 +92,7 @@ struct CircleNameView: View {
         Image(systemName: "plus")
             .font(.system(size: 11, weight: .bold))
             .foregroundStyle(.white)
-            .frame(width: 24, height: 24)
+            .frame(width: 26, height: 26)
             .background(TallyColors.accent)
             .clipShape(Circle())
             .overlay(Circle().stroke(TallyColors.bgPrimary, lineWidth: 2))
@@ -109,7 +102,7 @@ struct CircleNameView: View {
         Image(systemName: "pencil")
             .font(.system(size: 10, weight: .bold))
             .foregroundStyle(.white)
-            .frame(width: 24, height: 24)
+            .frame(width: 26, height: 26)
             .background(TallyColors.accent)
             .clipShape(Circle())
             .overlay(Circle().stroke(TallyColors.bgPrimary, lineWidth: 2))
@@ -127,9 +120,7 @@ struct CircleNameView: View {
 
     private func startPlaceholderRotation() {
         Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { _ in
-            withAnimation {
-                placeholderIndex = (placeholderIndex + 1) % placeholders.count
-            }
+            withAnimation { placeholderIndex = (placeholderIndex + 1) % placeholders.count }
         }
     }
 }

@@ -37,9 +37,9 @@ struct CardIssuedView: View {
                         cardTypeButton("Virtual (instant)", type: .virtual)
                         cardTypeButton("Physical (3–5 days)", type: .physical)
                     }
-                    .frame(height: 36)
+                    .frame(height: 40)
                     .background(TallyColors.bgSecondary)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .clipShape(RoundedRectangle(cornerRadius: TallySpacing.chipCornerRadius))
                     .padding(.top, TallySpacing.xl)
                 }
                 .padding(.horizontal, TallySpacing.screenPadding)
@@ -51,26 +51,18 @@ struct CardIssuedView: View {
                     Button("Continue", action: onContinue)
                         .buttonStyle(TallyPrimaryButtonStyle())
                 } else {
-                    Button {
-                        addToWallet()
-                    } label: {
+                    Button { addToWallet() } label: {
                         HStack(spacing: TallySpacing.sm) {
                             if walletState == .adding {
-                                ProgressView()
-                                    .tint(.white)
+                                ProgressView().tint(.white)
                             } else {
                                 Image(systemName: "wallet.bifold")
                                     .font(.system(size: 18))
                                 Text("Add to Apple Wallet")
-                                    .font(.system(size: 17, weight: .semibold))
                             }
                         }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: TallySpacing.buttonHeight)
-                        .background(.black)
-                        .clipShape(RoundedRectangle(cornerRadius: TallySpacing.buttonCornerRadius))
                     }
+                    .buttonStyle(TallyDarkButtonStyle())
                     .disabled(walletState == .adding)
                 }
             }
@@ -90,29 +82,28 @@ struct CardIssuedView: View {
             withAnimation(.spring(response: 0.2)) { cardType = type }
         } label: {
             Text(label)
-                .font(.system(size: 13, weight: .semibold))
+                .font(TallyFont.smallLabel)
+                .fontWeight(.semibold)
                 .foregroundStyle(cardType == type ? TallyColors.textPrimary : TallyColors.textSecondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(cardType == type ? Color.white : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .shadow(color: cardType == type ? .black.opacity(0.08) : .clear, radius: 3, y: 1)
-                .padding(2)
+                .background(cardType == type ? TallyColors.bgPrimary : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: TallySpacing.chipCornerRadius - 2))
+                .shadow(color: cardType == type ? .black.opacity(0.06) : .clear, radius: 4, y: 1)
+                .padding(3)
         }
     }
 
     private func addToWallet() {
         walletState = .adding
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            withAnimation(.spring(response: 0.5)) {
-                walletState = .added
-            }
+            withAnimation(.spring(response: 0.5)) { walletState = .added }
         }
     }
 }
 
 // MARK: - Card Visual
 
-private struct CardVisual: View {
+struct CardVisual: View {
     let photo: UIImage?
     let circleName: String
     let last4: String
@@ -120,7 +111,7 @@ private struct CardVisual: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 20)
+            RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius)
                 .fill(
                     LinearGradient(
                         colors: [TallyColors.accent, TallyColors.accent.opacity(0.65)],
@@ -129,22 +120,21 @@ private struct CardVisual: View {
                     )
                 )
                 .aspectRatio(1.586, contentMode: .fit)
-                .shadow(color: TallyColors.accent.opacity(0.3), radius: 20, y: 10)
+                .shadow(color: TallyColors.accent.opacity(0.35), radius: 24, y: 12)
 
             VStack(alignment: .leading) {
                 HStack {
-                    // Circle photo or initial
                     if let photo {
                         Image(uiImage: photo)
                             .resizable()
                             .scaledToFill()
-                            .frame(width: 32, height: 32)
+                            .frame(width: 34, height: 34)
                             .clipShape(Circle())
                     } else {
                         Text(String(circleName.prefix(1)).uppercased())
                             .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(TallyColors.accent)
-                            .frame(width: 32, height: 32)
+                            .frame(width: 34, height: 34)
                             .background(.white.opacity(0.3))
                             .clipShape(Circle())
                     }
@@ -152,10 +142,11 @@ private struct CardVisual: View {
                     Spacer()
 
                     Text(isVirtual ? "VIRTUAL" : "PHYSICAL")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.8))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
+                        .font(TallyFont.smallLabel)
+                        .fontWeight(.bold)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.horizontal, TallySpacing.sm)
+                        .padding(.vertical, TallySpacing.xs)
                         .background(.white.opacity(0.2))
                         .clipShape(Capsule())
                 }
@@ -171,10 +162,11 @@ private struct CardVisual: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(circleName.uppercased())
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(TallyFont.smallLabel)
+                            .fontWeight(.semibold)
                             .foregroundStyle(.white.opacity(0.7))
                         Text("Active")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(TallyFont.smallLabel)
                             .foregroundStyle(.white.opacity(0.7))
                     }
                     Spacer()

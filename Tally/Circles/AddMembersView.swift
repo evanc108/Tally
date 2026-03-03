@@ -6,162 +6,296 @@ struct AddMembersView: View {
 
     @State private var searchText = ""
 
-    private let contacts: [(name: String, phone: String)] = [
-        ("Alex Chen", "(555) 111-2222"),
-        ("Sarah Kim", "(555) 333-4444"),
-        ("Mike Johnson", "(555) 555-6666"),
-        ("Emily Davis", "(555) 777-8888"),
-        ("Chris Lee", "(555) 999-0000"),
-        ("Jordan Park", "(555) 222-3333"),
+    // Mock Tally users (on the platform)
+    private let tallyUsers: [(name: String, username: String)] = [
+        ("Alex Kim",     "@alexk"),
+        ("Sarah Jones",  "@sarahj"),
+        ("Mike Lee",     "@mikelee"),
     ]
 
-    private var filteredContacts: [(name: String, phone: String)] {
-        let addedNames = Set(state.members.map(\.name))
-        return contacts.filter { contact in
-            !addedNames.contains(contact.name) &&
-            (searchText.isEmpty ||
-             contact.name.localizedCaseInsensitiveContains(searchText) ||
-             contact.phone.contains(searchText))
+    // Mock device contacts (not on Tally)
+    private let deviceContacts: [String] = [
+        "John Doe",
+        "Amy Smith",
+        "Rachel Park",
+    ]
+
+    private var filteredTallyUsers: [(name: String, username: String)] {
+        guard !searchText.isEmpty else { return tallyUsers }
+        return tallyUsers.filter {
+            $0.name.localizedCaseInsensitiveContains(searchText) ||
+            $0.username.localizedCaseInsensitiveContains(searchText)
         }
+    }
+
+    private var filteredDeviceContacts: [String] {
+        guard !searchText.isEmpty else { return deviceContacts }
+        return deviceContacts.filter {
+            $0.localizedCaseInsensitiveContains(searchText)
+        }
+    }
+
+    private func isMemberAdded(_ name: String) -> Bool {
+        state.members.contains { $0.name == name }
+    }
+
+    private func initials(for name: String) -> String {
+        name.split(separator: " ").map { String($0.prefix(1)) }.joined()
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    // Title
-                    Text("Who's in?")
-                        .font(TallyFont.largeTitle)
-                        .foregroundStyle(TallyColors.textPrimary)
-                        .padding(.top, TallySpacing.sm)
-
-                    // Search
-                    HStack(spacing: TallySpacing.md) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 18))
-                            .foregroundStyle(TallyColors.textSecondary)
-                        TextField("Search by name or phone", text: $searchText)
-                            .font(.system(size: 16))
-                            .foregroundStyle(TallyColors.textPrimary)
-                    }
-                    .padding(.horizontal, TallySpacing.lg)
-                    .frame(height: 48)
-                    .background(TallyColors.bgSecondary)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .padding(.top, TallySpacing.xl)
-
-                    // Member chips
-                    FlowLayout(spacing: 8) {
-                        MemberChipView(name: "You", initial: "Y", color: TallyColors.accent, removable: false, onRemove: {})
-                        ForEach(state.members) { member in
-                            MemberChipView(name: member.name, initial: member.initial, color: member.color, removable: true) {
-                                withAnimation(.spring(response: 0.3)) {
-                                    state.members.removeAll { $0.id == member.id }
+            // ── Fixed header ────────────────────────────────────────────────
+            VStack(alignment: .leading, spacing: 0) {
+                // Member chips (selected members)
+                if !state.members.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: TallySpacing.sm) {
+                            ForEach(state.members) { member in
+                                MemberChipView(
+                                    name: member.name,
+                                    initial: member.initial,
+                                    color: member.color,
+                                    removable: true
+                                ) {
+                                    withAnimation(.spring(response: 0.3)) {
+                                        state.members.removeAll { $0.id == member.id }
+                                    }
                                 }
                             }
                         }
                     }
-                    .padding(.top, TallySpacing.lg)
+                    .padding(.top, TallySpacing.md)
+                }
 
-                    // People count
-                    Text("\(state.members.count + 1) \(state.members.count + 1 == 1 ? "person" : "people")")
-                        .font(.system(size: 14))
+                // Search bar
+                HStack(spacing: TallySpacing.md) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(TallyColors.textSecondary)
-                        .padding(.top, TallySpacing.md)
-
-                    // Contacts list — bigger cards
-                    VStack(spacing: TallySpacing.sm) {
-                        ForEach(filteredContacts, id: \.name) { contact in
-                            Button {
-                                addContact(contact)
-                            } label: {
-                                ContactCard(contact: contact)
-                            }
-                            .buttonStyle(.plain)
+                    TextField("Search contacts...", text: $searchText)
+                        .font(TallyFont.body)
+                        .foregroundStyle(TallyColors.textPrimary)
+                    if !searchText.isEmpty {
+                        Button { searchText = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(TallyColors.textTertiary)
                         }
                     }
-                    .padding(.top, TallySpacing.xl)
+                }
+                .padding(.horizontal, TallySpacing.lg)
+                .frame(height: TallySpacing.inputHeight)
+                .background(TallyColors.bgSecondary)
+                .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
+                .padding(.top, TallySpacing.lg)
+            }
+            .padding(.horizontal, TallySpacing.screenPadding)
+
+            // ── Scrollable contact sections ─────────────────────────────────
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // ON TALLY section
+                    if !filteredTallyUsers.isEmpty {
+                        Text("ON TALLY")
+                            .font(TallyFont.smallLabel)
+                            .foregroundStyle(TallyColors.textSecondary)
+                            .padding(.horizontal, TallySpacing.screenPadding)
+                            .padding(.top, TallySpacing.xl)
+                            .padding(.bottom, TallySpacing.sm)
+
+                        ForEach(Array(filteredTallyUsers.enumerated()), id: \.element.name) { index, user in
+                            TallyUserRow(
+                                name: user.name,
+                                username: user.username,
+                                initials: initials(for: user.name),
+                                color: tallyUserColor(for: index),
+                                isSelected: isMemberAdded(user.name)
+                            ) {
+                                toggleTallyUser(user, index: index)
+                            }
+
+                            if index < filteredTallyUsers.count - 1 {
+                                Divider()
+                                    .padding(.leading, TallySpacing.screenPadding + 48 + TallySpacing.md)
+                            }
+                        }
+                    }
+
+                    // FROM CONTACTS section
+                    if !filteredDeviceContacts.isEmpty {
+                        Text("FROM CONTACTS")
+                            .font(TallyFont.smallLabel)
+                            .foregroundStyle(TallyColors.textSecondary)
+                            .padding(.horizontal, TallySpacing.screenPadding)
+                            .padding(.top, TallySpacing.xl)
+                            .padding(.bottom, TallySpacing.sm)
+
+                        ForEach(Array(filteredDeviceContacts.enumerated()), id: \.element) { index, contact in
+                            DeviceContactRow(
+                                name: contact,
+                                initials: initials(for: contact)
+                            )
+
+                            if index < filteredDeviceContacts.count - 1 {
+                                Divider()
+                                    .padding(.leading, TallySpacing.screenPadding + 48 + TallySpacing.md)
+                            }
+                        }
+                    }
 
                     // Share invite link
+                    Divider()
+                        .padding(.top, TallySpacing.lg)
+
                     Button {} label: {
-                        HStack(spacing: TallySpacing.sm) {
+                        HStack(spacing: TallySpacing.md) {
                             Image(systemName: "link")
-                                .font(.system(size: 16))
-                            Text("Share invite link")
                                 .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(TallyColors.textSecondary)
+                                .frame(width: 48, height: 48)
+                                .background(TallyColors.bgSecondary)
+                                .clipShape(Circle())
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Share invite link")
+                                    .font(TallyFont.bodySemibold)
+                                    .foregroundStyle(TallyColors.textPrimary)
+                                Text("Or share via QR code")
+                                    .font(TallyFont.caption)
+                                    .foregroundStyle(TallyColors.textSecondary)
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(TallyColors.textTertiary)
                         }
-                        .foregroundStyle(TallyColors.accent)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, TallySpacing.lg)
+                        .padding(.horizontal, TallySpacing.screenPadding)
+                        .padding(.vertical, TallySpacing.md)
                     }
-                    .padding(.top, TallySpacing.sm)
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, TallySpacing.screenPadding)
+                .padding(.bottom, TallySpacing.xl)
             }
 
-            // Continue button
-            Button("Continue", action: onContinue)
-                .buttonStyle(TallyPrimaryButtonStyle())
-                .disabled(state.members.count < 1)
-                .opacity(state.members.count >= 1 ? 1 : 0.5)
-                .padding(.horizontal, TallySpacing.screenPadding)
-                .padding(.bottom, TallySpacing.xxxl)
+            // ── Pinned footer ───────────────────────────────────────────────
+            VStack(spacing: 0) {
+                Button("Continue", action: onContinue)
+                    .buttonStyle(TallyPrimaryButtonStyle())
+                    .disabled(state.members.count < 1)
+                    .opacity(state.members.count >= 1 ? 1 : 0.5)
+                    .padding(.top, TallySpacing.md)
+                    .padding(.bottom, TallySpacing.xxxl)
+            }
+            .padding(.horizontal, TallySpacing.screenPadding)
         }
         .background(TallyColors.bgPrimary)
     }
 
-    private func addContact(_ contact: (name: String, phone: String)) {
-        let initial = String(contact.name.prefix(1)).uppercased()
-        let colors: [Color] = [.orange, .blue, .pink, .purple, .cyan, .mint, .indigo, .brown]
-        let color = colors[state.members.count % colors.count]
-        let member = CircleMember(name: contact.name, initial: initial, color: color)
+    // MARK: - Actions
+
+    private func toggleTallyUser(_ user: (name: String, username: String), index: Int) {
         withAnimation(.spring(response: 0.3)) {
-            state.members.append(member)
+            if let existingIndex = state.members.firstIndex(where: { $0.name == user.name }) {
+                state.members.remove(at: existingIndex)
+            } else {
+                let initial = initials(for: user.name)
+                let color = tallyUserColor(for: index)
+                let member = CircleMember(name: user.name, initial: initial, color: color)
+                state.members.append(member)
+            }
         }
+    }
+
+    private func tallyUserColor(for index: Int) -> Color {
+        let colors: [Color] = [.red, .purple, .green, .blue, .orange, .pink, .cyan]
+        return colors[index % colors.count]
     }
 }
 
-// MARK: - Contact Card (bigger)
+// MARK: - Tally User Row (on platform)
 
-private struct ContactCard: View {
-    let contact: (name: String, phone: String)
-
-    private var initials: String {
-        contact.name.split(separator: " ").map { String($0.prefix(1)) }.joined()
-    }
+private struct TallyUserRow: View {
+    let name: String
+    let username: String
+    let initials: String
+    let color: Color
+    let isSelected: Bool
+    let onTap: () -> Void
 
     var body: some View {
-        HStack(spacing: TallySpacing.lg) {
-            // Large gradient avatar
+        Button(action: onTap) {
+            HStack(spacing: TallySpacing.md) {
+                // Avatar
+                Text(initials)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 48, height: 48)
+                    .background(color)
+                    .clipShape(Circle())
+
+                // Name + username
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(name)
+                        .font(TallyFont.bodySemibold)
+                        .foregroundStyle(TallyColors.textPrimary)
+                    Text(username)
+                        .font(TallyFont.caption)
+                        .foregroundStyle(TallyColors.textSecondary)
+                }
+
+                Spacer(minLength: 0)
+
+                // Selection indicator
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 24))
+                        .foregroundStyle(TallyColors.statusSuccess)
+                } else {
+                    Circle()
+                        .strokeBorder(TallyColors.textTertiary, lineWidth: 1.5)
+                        .frame(width: 24, height: 24)
+                }
+            }
+            .padding(.horizontal, TallySpacing.screenPadding)
+            .padding(.vertical, TallySpacing.md)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Device Contact Row (not on Tally)
+
+private struct DeviceContactRow: View {
+    let name: String
+    let initials: String
+
+    var body: some View {
+        HStack(spacing: TallySpacing.md) {
+            // Avatar (muted)
             Text(initials)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 52, height: 52)
-                .background(
-                    LinearGradient(
-                        colors: [TallyColors.accent, TallyColors.statusSocial],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(TallyColors.textSecondary)
+                .frame(width: 48, height: 48)
+                .background(TallyColors.bgSecondary)
                 .clipShape(Circle())
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(contact.name)
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(TallyColors.textPrimary)
-                Text(contact.phone)
-                    .font(.system(size: 14))
-                    .foregroundStyle(TallyColors.textSecondary)
-            }
+            Text(name)
+                .font(TallyFont.bodySemibold)
+                .foregroundStyle(TallyColors.textPrimary)
 
-            Spacer()
+            Spacer(minLength: 0)
+
+            Button {} label: {
+                Text("Invite")
+                    .font(TallyFont.bodySemibold)
+                    .foregroundStyle(TallyColors.accent)
+            }
+            .buttonStyle(.plain)
         }
-        .padding(.horizontal, TallySpacing.lg)
+        .padding(.horizontal, TallySpacing.screenPadding)
         .padding(.vertical, TallySpacing.md)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(TallyColors.divider).frame(height: 0.5)
-        }
     }
 }
 
@@ -174,16 +308,27 @@ private struct MemberChipView: View {
     let removable: Bool
     let onRemove: () -> Void
 
+    private var shortName: String {
+        let parts = name.split(separator: " ")
+        guard let first = parts.first else { return name }
+        if let last = parts.last, parts.count > 1 {
+            return "\(first) \(last.prefix(1))."
+        }
+        return String(first)
+    }
+
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: TallySpacing.xs) {
             Text(initial)
-                .font(.system(size: 11, weight: .bold))
+                .font(TallyFont.smallLabel)
+                .fontWeight(.bold)
                 .foregroundStyle(.white)
-                .frame(width: 22, height: 22)
+                .frame(width: 24, height: 24)
                 .background(color)
                 .clipShape(Circle())
-            Text(name)
-                .font(.system(size: 14, weight: .medium))
+            Text(shortName)
+                .font(TallyFont.caption)
+                .fontWeight(.medium)
                 .foregroundStyle(TallyColors.textPrimary)
             if removable {
                 Button(action: onRemove) {
@@ -193,47 +338,10 @@ private struct MemberChipView: View {
                 }
             }
         }
-        .padding(.leading, 4)
-        .padding(.trailing, 12)
-        .padding(.vertical, 4)
+        .padding(.leading, TallySpacing.xs)
+        .padding(.trailing, TallySpacing.md)
+        .padding(.vertical, TallySpacing.xs)
         .background(TallyColors.bgSecondary)
         .clipShape(Capsule())
-    }
-}
-
-// MARK: - Flow Layout
-
-private struct FlowLayout: Layout {
-    var spacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        arrange(proposal: proposal, subviews: subviews).size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = arrange(proposal: proposal, subviews: subviews)
-        for (index, subview) in subviews.enumerated() {
-            subview.place(at: CGPoint(x: bounds.minX + result.positions[index].x,
-                                      y: bounds.minY + result.positions[index].y),
-                          proposal: .unspecified)
-        }
-    }
-
-    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (positions: [CGPoint], size: CGSize) {
-        let maxWidth = proposal.width ?? .infinity
-        var positions: [CGPoint] = []
-        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, maxX: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x + size.width > maxWidth && x > 0 {
-                x = 0; y += rowHeight + spacing; rowHeight = 0
-            }
-            positions.append(CGPoint(x: x, y: y))
-            rowHeight = max(rowHeight, size.height)
-            x += size.width + spacing
-            maxX = max(maxX, x - spacing)
-        }
-        return (positions, CGSize(width: maxX, height: y + rowHeight))
     }
 }

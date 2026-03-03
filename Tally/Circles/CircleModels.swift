@@ -4,14 +4,75 @@ import PhotosUI
 // MARK: - Circle Model
 
 struct TallyCircle: Identifiable {
-    let id = UUID()
+    /// Stable local ID for SwiftUI identity (always auto-generated).
+    let id: UUID
+    /// UUID string returned by the server. Nil for locally-created draft circles.
+    var serverId: String?
     var name: String
     var photo: UIImage?
     var members: [CircleMember]
     var splitMethod: SplitMethod
     var leaderId: UUID?
     var transactions: [CircleTransaction]
+    var walletBalance: Double
     var createdAt: Date
+
+    /// Local-only init used by sample data and previews.
+    init(
+        name: String,
+        members: [CircleMember],
+        splitMethod: SplitMethod,
+        leaderId: UUID? = nil,
+        transactions: [CircleTransaction],
+        walletBalance: Double = 0,
+        createdAt: Date
+    ) {
+        self.id            = UUID()
+        self.serverId      = nil
+        self.name          = name
+        self.members       = members
+        self.splitMethod   = splitMethod
+        self.leaderId      = leaderId
+        self.transactions  = transactions
+        self.walletBalance = walletBalance
+        self.createdAt     = createdAt
+    }
+
+    /// Server-backed init used after a successful API create/fetch.
+    init(
+        serverId: String,
+        name: String,
+        members: [CircleMember],
+        splitMethod: SplitMethod,
+        leaderId: UUID? = nil,
+        transactions: [CircleTransaction],
+        walletBalance: Double = 0,
+        createdAt: Date
+    ) {
+        self.id            = UUID()
+        self.serverId      = serverId
+        self.name          = name
+        self.members       = members
+        self.splitMethod   = splitMethod
+        self.leaderId      = leaderId
+        self.transactions  = transactions
+        self.walletBalance = walletBalance
+        self.createdAt     = createdAt
+    }
+}
+
+extension TallyCircle {
+    /// Maps a summary DTO from GET /v1/groups into a TallyCircle.
+    init(from dto: CircleSummaryDTO) {
+        self.init(
+            serverId: dto.groupID,
+            name: dto.displayName ?? dto.name,
+            members: [],
+            splitMethod: .equal,
+            transactions: [],
+            createdAt: ISO8601DateFormatter().date(from: dto.createdAt) ?? .now
+        )
+    }
 }
 
 struct CircleMember: Identifiable, Hashable {
@@ -179,15 +240,21 @@ final class CreateCircleState {
     }
 }
 
+// MARK: - Hashable
+
+extension TallyCircle: Hashable {
+    static func == (lhs: TallyCircle, rhs: TallyCircle) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
 // MARK: - Sample Data
 
 extension TallyCircle {
     static let sample = TallyCircle(
         name: "Roommates",
         members: [
-            CircleMember(name: "You", initial: "Y", color: TallyColors.accent),
-            CircleMember(name: "Sarah", initial: "S", color: .orange),
-            CircleMember(name: "Alex", initial: "A", color: .blue),
+            CircleMember(name: "Sarah Kim", initial: "S", color: .orange),
+            CircleMember(name: "Alex Chen", initial: "A", color: .blue),
         ],
         splitMethod: .equal,
         transactions: [
@@ -195,6 +262,39 @@ extension TallyCircle {
             CircleTransaction(title: "Electric bill", amount: 142.00, paidBy: "You", emoji: "⚡", status: .pending, date: .now.addingTimeInterval(-86400)),
             CircleTransaction(title: "Internet", amount: 65.99, paidBy: "Alex", emoji: "📡", status: .settled, date: .now.addingTimeInterval(-172800)),
         ],
+        walletBalance: 320.00,
         createdAt: .now.addingTimeInterval(-604800)
     )
+
+    static let samples: [TallyCircle] = [
+        TallyCircle.sample,
+        TallyCircle(
+            name: "Ski Trip",
+            members: [
+                CircleMember(name: "Jordan Park", initial: "J", color: .purple),
+                CircleMember(name: "Mike Lee", initial: "M", color: .cyan),
+                CircleMember(name: "Emily Davis", initial: "E", color: .pink),
+            ],
+            splitMethod: .equal,
+            transactions: [
+                CircleTransaction(title: "Lift Tickets", amount: 320.00, paidBy: "You", emoji: "🎿", status: .settled, date: .now.addingTimeInterval(-86400 * 3)),
+                CircleTransaction(title: "Lodge", amount: 480.00, paidBy: "Jordan", emoji: "🏔️", status: .pending, date: .now.addingTimeInterval(-86400 * 4)),
+            ],
+            walletBalance: 800.00,
+            createdAt: .now.addingTimeInterval(-86400 * 5)
+        ),
+        TallyCircle(
+            name: "Monthly Bills",
+            members: [
+                CircleMember(name: "Sarah Kim", initial: "S", color: .orange),
+            ],
+            splitMethod: .percentage,
+            transactions: [
+                CircleTransaction(title: "Internet", amount: 65.99, paidBy: "You", emoji: "📡", status: .settled, date: .now.addingTimeInterval(-86400 * 2)),
+                CircleTransaction(title: "Electric", amount: 142.00, paidBy: "Sarah", emoji: "⚡", status: .pending, date: .now),
+            ],
+            walletBalance: 250.00,
+            createdAt: .now.addingTimeInterval(-86400 * 30)
+        ),
+    ]
 }

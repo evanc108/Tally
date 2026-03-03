@@ -4,5 +4,7 @@
 <dict>
 	<key>CLERK_PUBLISHABLE_KEY</key>
 	<string>$(CLERK_PUBLISHABLE_KEY)</string>
+	<key>API_BASE_URL</key>
+	<string>$(API_BASE_URL)</string>
 </dict>
 </plist>

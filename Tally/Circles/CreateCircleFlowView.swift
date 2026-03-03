@@ -1,7 +1,9 @@
 import SwiftUI
 
 struct CreateCircleFlowView: View {
-    @State private var state = CreateCircleState.seeded()
+    let viewModel: CirclesViewModel
+    var onCircleCreated: ((TallyCircle) -> Void)?
+    @State private var state = CreateCircleState()
     @State private var path: [CreateCircleRoute] = []
     @Environment(\.dismiss) private var dismiss
 
@@ -69,7 +71,10 @@ struct CreateCircleFlowView: View {
                 }
 
         case .circleReady:
-            CircleReadyView(state: state) { dismiss() }
+            CircleReadyView(state: state, viewModel: viewModel) { createdCircle in
+                onCircleCreated?(createdCircle)
+                dismiss()
+            }
         }
     }
 }
