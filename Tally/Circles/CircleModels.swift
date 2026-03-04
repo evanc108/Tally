@@ -11,11 +11,20 @@ struct TallyCircle: Identifiable {
     var name: String
     var photo: UIImage?
     var members: [CircleMember]
+    /// Server-reported member count (includes "You"). Falls back to local members + 1.
+    var serverMemberCount: Int?
     var splitMethod: SplitMethod
     var leaderId: UUID?
     var transactions: [CircleTransaction]
     var walletBalance: Double
+    var myCardLastFour: String?
+    var myCardType: String?
     var createdAt: Date
+
+    /// Authoritative member count — prefers server value over local.
+    var memberCount: Int {
+        serverMemberCount ?? (members.count + 1)
+    }
 
     /// Local-only init used by sample data and previews.
     init(
@@ -27,15 +36,16 @@ struct TallyCircle: Identifiable {
         walletBalance: Double = 0,
         createdAt: Date
     ) {
-        self.id            = UUID()
-        self.serverId      = nil
-        self.name          = name
-        self.members       = members
-        self.splitMethod   = splitMethod
-        self.leaderId      = leaderId
-        self.transactions  = transactions
-        self.walletBalance = walletBalance
-        self.createdAt     = createdAt
+        self.id                = UUID()
+        self.serverId          = nil
+        self.name              = name
+        self.members           = members
+        self.serverMemberCount = nil
+        self.splitMethod       = splitMethod
+        self.leaderId          = leaderId
+        self.transactions      = transactions
+        self.walletBalance     = walletBalance
+        self.createdAt         = createdAt
     }
 
     /// Server-backed init used after a successful API create/fetch.
@@ -43,21 +53,27 @@ struct TallyCircle: Identifiable {
         serverId: String,
         name: String,
         members: [CircleMember],
+        serverMemberCount: Int? = nil,
         splitMethod: SplitMethod,
         leaderId: UUID? = nil,
         transactions: [CircleTransaction],
         walletBalance: Double = 0,
+        myCardLastFour: String? = nil,
+        myCardType: String? = nil,
         createdAt: Date
     ) {
-        self.id            = UUID()
-        self.serverId      = serverId
-        self.name          = name
-        self.members       = members
-        self.splitMethod   = splitMethod
-        self.leaderId      = leaderId
-        self.transactions  = transactions
-        self.walletBalance = walletBalance
-        self.createdAt     = createdAt
+        self.id                = UUID()
+        self.serverId          = serverId
+        self.name              = name
+        self.members           = members
+        self.serverMemberCount = serverMemberCount
+        self.splitMethod       = splitMethod
+        self.leaderId          = leaderId
+        self.transactions      = transactions
+        self.walletBalance     = walletBalance
+        self.myCardLastFour    = myCardLastFour
+        self.myCardType        = myCardType
+        self.createdAt         = createdAt
     }
 }
 
@@ -68,8 +84,11 @@ extension TallyCircle {
             serverId: dto.groupID,
             name: dto.displayName ?? dto.name,
             members: [],
+            serverMemberCount: dto.memberCount,
             splitMethod: .equal,
             transactions: [],
+            myCardLastFour: dto.myCardLastFour,
+            myCardType: dto.myCardType,
             createdAt: ISO8601DateFormatter().date(from: dto.createdAt) ?? .now
         )
     }

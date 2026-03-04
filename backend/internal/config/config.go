@@ -20,6 +20,11 @@ type Config struct {
 	// DevUserID is injected as the authenticated user when CLERK_JWKS_URL is
 	// unset. Never used in production (Validate() blocks that path).
 	DevUserID string
+	// GeminiAPIKey is the Google Gemini API key for LLM-based receipt parsing.
+	// If empty, the receipt parse endpoint returns 503.
+	GeminiAPIKey string
+	// GeminiModel overrides the default Gemini model (gemini-2.0-flash-lite).
+	GeminiModel string
 }
 
 func Load() *Config {
@@ -34,6 +39,8 @@ func Load() *Config {
 		StripeIssuingCardProduct: getEnv("STRIPE_ISSUING_CARD_PRODUCT", ""),
 		ClerkJWKSURL:             getEnv("CLERK_JWKS_URL", ""),
 		DevUserID:                getEnv("DEV_USER_ID", "dev-user-local"),
+		GeminiAPIKey:             getEnv("GEMINI_API_KEY", ""),
+		GeminiModel:              getEnv("GEMINI_MODEL", ""),
 	}
 }
 

@@ -60,14 +60,57 @@ struct CircleSummaryDTO: Decodable {
     let name: String
     let displayName: String?
     let currency: String
+    let memberCount: Int?
+    let myCardLastFour: String?
+    let myCardType: String?
     let createdAt: String
 
     enum CodingKeys: String, CodingKey {
-        case groupID     = "group_id"
+        case groupID        = "group_id"
         case name
-        case displayName = "display_name"
+        case displayName    = "display_name"
         case currency
-        case createdAt   = "created_at"
+        case memberCount    = "member_count"
+        case myCardLastFour = "my_card_last_four"
+        case myCardType     = "my_card_type"
+        case createdAt      = "created_at"
+    }
+}
+
+// MARK: - Group Detail
+
+/// Response from GET /v1/groups/:id — includes full member list.
+struct GroupDetailResponseDTO: Decodable {
+    let groupID: String
+    let name: String
+    let currency: String
+    let members: [GroupMemberDTO]
+
+    enum CodingKeys: String, CodingKey {
+        case groupID  = "group_id"
+        case name
+        case currency
+        case members
+    }
+}
+
+struct GroupMemberDTO: Decodable {
+    let memberID: String
+    let displayName: String
+    let splitWeight: Double
+    let tallyBalanceCents: Int64
+    let isLeader: Bool
+    let hasCard: Bool
+    let kycStatus: String
+
+    enum CodingKeys: String, CodingKey {
+        case memberID          = "member_id"
+        case displayName       = "display_name"
+        case splitWeight       = "split_weight"
+        case tallyBalanceCents = "tally_balance_cents"
+        case isLeader          = "is_leader"
+        case hasCard           = "has_card"
+        case kycStatus         = "kyc_status"
     }
 }
 

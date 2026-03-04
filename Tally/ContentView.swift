@@ -39,7 +39,9 @@ enum TallyTab: Int, CaseIterable {
 struct ContentView: View {
     @Environment(Clerk.self) private var clerk
     @State private var selectedTab: TallyTab = .home
+    @State private var previousTab: TallyTab = .home
     @State private var circlesViewModel = CirclesViewModel()
+    @State private var showPayFlow = false
 
     init() {
         // Hide the system tab bar globally
@@ -54,17 +56,22 @@ struct ContentView: View {
         UINavigationBar.appearance().scrollEdgeAppearance = navAppearance
     }
 
+    /// The tab actually displayed — pay is never shown inline.
+    private var displayedTab: TallyTab {
+        selectedTab == .pay ? previousTab : selectedTab
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             // Tab content
             Group {
-                switch selectedTab {
+                switch displayedTab {
                 case .home:
                     HomeTab()
                 case .circles:
                     CirclesTab(viewModel: circlesViewModel)
                 case .pay:
-                    PayTab()
+                    EmptyView()
                 case .wallet:
                     WalletTab()
                 case .profile:
@@ -77,6 +84,17 @@ struct ContentView: View {
             TallyTabBar(selectedTab: $selectedTab)
         }
         .ignoresSafeArea(.keyboard)
+        .onChange(of: selectedTab) { oldTab, newTab in
+            if newTab == .pay {
+                showPayFlow = true
+                selectedTab = oldTab
+            } else {
+                previousTab = newTab
+            }
+        }
+        .fullScreenCover(isPresented: $showPayFlow) {
+            PayFlowView()
+        }
     }
 }
 
@@ -544,33 +562,6 @@ private struct CirclesTab: View {
                 .buttonStyle(TallyPrimaryButtonStyle())
                 .padding(.horizontal, TallySpacing.screenPadding)
             Spacer()
-        }
-    }
-}
-
-// MARK: - Pay Tab
-
-private struct PayTab: View {
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: TallySpacing.lg) {
-                Spacer()
-                Image(systemName: "dollarsign.circle")
-                    .font(.system(size: 48))
-                    .foregroundStyle(TallyColors.textSecondary)
-                Text("Pay & Request")
-                    .font(TallyFont.title)
-                    .foregroundStyle(TallyColors.textPrimary)
-                Text("Send money or request payments from friends.")
-                    .font(TallyFont.body)
-                    .foregroundStyle(TallyColors.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, TallySpacing.xxl)
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(TallyColors.bgPrimary)
-            .navigationTitle("Pay")
         }
     }
 }

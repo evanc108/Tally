@@ -61,7 +61,7 @@ private struct CircleCard: View {
     let index: Int
 
     private var accentColor: Color { TallyColors.cardColor(for: index) }
-    private var memberCount: Int { circle.members.count + 1 }
+    private var memberCount: Int { circle.memberCount }
 
     var body: some View {
         VStack(alignment: .leading, spacing: TallySpacing.md) {

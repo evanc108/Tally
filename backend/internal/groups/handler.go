@@ -279,10 +279,14 @@ func (h *Handler) AddMember(c *gin.Context) {
 // ── GET /v1/groups ────────────────────────────────────────────────────────────
 
 type groupSummary struct {
-	GroupID   string `json:"group_id"`
-	Name      string `json:"name"`
-	Currency  string `json:"currency"`
-	CreatedAt string `json:"created_at"`
+	GroupID        string  `json:"group_id"`
+	Name           string  `json:"name"`
+	DisplayName    string  `json:"display_name,omitempty"`
+	Currency       string  `json:"currency"`
+	MemberCount    int     `json:"member_count"`
+	MyCardLastFour *string `json:"my_card_last_four,omitempty"`
+	MyCardType     *string `json:"my_card_type,omitempty"`
+	CreatedAt      string  `json:"created_at"`
 }
 
 // ListGroups returns all groups the authenticated user belongs to.
@@ -308,10 +312,13 @@ func (h *Handler) ListGroups(c *gin.Context) {
 	}
 
 	rows, err := h.db.QueryContext(c.Request.Context(), `
-		SELECT g.id, g.name, g.currency, g.created_at
+		SELECT g.id, g.name, COALESCE(g.display_name, g.name), g.currency, g.created_at,
+		       (SELECT COUNT(*) FROM members m2 WHERE m2.group_id = g.id) AS member_count,
+		       c.last_four, c.card_type
 		FROM tally_groups g
 		JOIN members m ON m.group_id = g.id
-		WHERE m.user_id = $1
+		LEFT JOIN cards c ON c.member_id = m.id AND c.is_primary = TRUE AND c.status = 'active'
+		WHERE m.user_id = $1 AND g.archived_at IS NULL
 		ORDER BY g.created_at DESC`,
 		clerkUserID,
 	)
@@ -325,11 +332,18 @@ func (h *Handler) ListGroups(c *gin.Context) {
 	for rows.Next() {
 		var g groupSummary
 		var createdAt time.Time
-		if err := rows.Scan(&g.GroupID, &g.Name, &g.Currency, &createdAt); err != nil {
+		var lastFour, cardType sql.NullString
+		if err := rows.Scan(&g.GroupID, &g.Name, &g.DisplayName, &g.Currency, &createdAt, &g.MemberCount, &lastFour, &cardType); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "scan failed"})
 			return
 		}
 		g.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		if lastFour.Valid {
+			g.MyCardLastFour = &lastFour.String
+		}
+		if cardType.Valid {
+			g.MyCardType = &cardType.String
+		}
 		result = append(result, g)
 	}
 
@@ -376,7 +390,7 @@ func (h *Handler) GetGroup(c *gin.Context) {
 
 	var name, currency string
 	if err := h.db.QueryRowContext(c.Request.Context(),
-		`SELECT name, currency FROM tally_groups WHERE id = $1`, groupID,
+		`SELECT name, currency FROM tally_groups WHERE id = $1 AND archived_at IS NULL`, groupID,
 	).Scan(&name, &currency); err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "group not found"})
 		return
@@ -872,4 +886,44 @@ func (h *Handler) SettleIOU(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "settled"})
+}
+
+// ── DELETE /v1/groups/:id ────────────────────────────────────────────────────
+
+type archiveGroupResponse struct {
+	GroupID    string `json:"group_id"`
+	ArchivedAt string `json:"archived_at"`
+}
+
+// ArchiveGroup soft-deletes a group by setting archived_at. Leader only.
+func (h *Handler) ArchiveGroup(c *gin.Context) {
+	groupID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group_id"})
+		return
+	}
+
+	var archivedAt time.Time
+	err = h.db.QueryRowContext(c.Request.Context(), `
+		UPDATE tally_groups
+		SET archived_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND archived_at IS NULL
+		RETURNING archived_at`,
+		groupID,
+	).Scan(&archivedAt)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "group not found or already archived"})
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "archive group failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+		return
+	}
+
+	slog.InfoContext(c.Request.Context(), "group archived", "group_id", groupID)
+	c.JSON(http.StatusOK, archiveGroupResponse{
+		GroupID:    groupID.String(),
+		ArchivedAt: archivedAt.UTC().Format(time.RFC3339),
+	})
 }
