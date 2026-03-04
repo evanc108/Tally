@@ -94,8 +94,11 @@ struct PayReceiptEntryView: View {
     private func handleContinue() {
         if viewModel.receipt != nil {
             viewModel.push(.receiptReview)
+        } else if viewModel.selectedPaymentMethod?.kind == .wallet {
+            // Wallet + manual: no receipt tip to adjust, skip to confirm
+            viewModel.push(.walletConfirm)
         } else {
-            viewModel.push(.splitConfig)
+            viewModel.push(.tipConfig)
         }
     }
 

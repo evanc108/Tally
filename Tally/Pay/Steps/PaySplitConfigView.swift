@@ -3,6 +3,26 @@ import SwiftUI
 struct PaySplitConfigView: View {
     @Bindable var viewModel: PayFlowViewModel
 
+    private var availableMethods: [PaySplitMethod] {
+        PaySplitMethod.allCases.filter { method in
+            if method == .itemized { return viewModel.receipt != nil }
+            return true
+        }
+    }
+
+    private var isPercentageValid: Bool {
+        let total = viewModel.serverMembers.reduce(0.0) {
+            $0 + (viewModel.memberPercentages[$1.memberID] ?? 0)
+        }
+        return abs(total - 100.0) < 0.01
+    }
+
+    private var isContinueDisabled: Bool {
+        if viewModel.isFetchingMembers { return true }
+        if viewModel.splitMethod == .percentage && !isPercentageValid { return true }
+        return false
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // ── Scrollable content ──────────────────────────────────────────
@@ -19,29 +39,39 @@ struct PaySplitConfigView: View {
                         .foregroundStyle(TallyColors.textSecondary)
                         .padding(.top, TallySpacing.sm)
 
-                    // Split method cards
+                    // Split method cards (hide "By Items" when no receipt)
                     VStack(spacing: TallySpacing.md) {
-                        ForEach(PaySplitMethod.allCases) { method in
+                        ForEach(availableMethods) { method in
                             SplitMethodCard(
                                 method: method,
                                 isSelected: viewModel.splitMethod == method
                             ) {
                                 withAnimation(.spring(response: 0.3)) {
                                     viewModel.splitMethod = method
+                                    if method == .percentage && viewModel.memberPercentages.isEmpty {
+                                        viewModel.initializeEqualPercentages()
+                                    }
                                 }
                             }
                         }
                     }
                     .padding(.top, TallySpacing.xl)
 
-                    // Equal split preview
-                    if viewModel.splitMethod == .equal, let circle = viewModel.selectedCircle {
-                        equalSplitPreview(circle: circle)
+                    // ── Equal split preview ───────────────────────────────
+                    if viewModel.splitMethod == .equal {
+                        memberAmountPreview
                             .padding(.top, TallySpacing.xl)
                             .transition(.opacity.combined(with: .move(edge: .top)))
                     }
 
-                    // Itemized assignment mode
+                    // ── Percentage sliders (inline) ───────────────────────
+                    if viewModel.splitMethod == .percentage {
+                        percentageSection
+                            .padding(.top, TallySpacing.xl)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    // ── Itemized assignment mode ──────────────────────────
                     if viewModel.splitMethod == .itemized {
                         assignmentModeSection
                             .padding(.top, TallySpacing.xl)
@@ -57,30 +87,39 @@ struct PaySplitConfigView: View {
                 handleContinue()
             }
             .buttonStyle(TallyPrimaryButtonStyle())
+            .disabled(isContinueDisabled)
+            .opacity(isContinueDisabled ? 0.5 : 1.0)
             .padding(.horizontal, TallySpacing.screenPadding)
             .padding(.bottom, TallySpacing.xxxl)
         }
         .background(TallyColors.bgPrimary)
         .onAppear {
-            // Recompute splits now that totalCents is known.
+            // Reset to .equal if itemized was selected but no receipt exists
+            if viewModel.splitMethod == .itemized && viewModel.receipt == nil {
+                viewModel.splitMethod = .equal
+            }
+            // Recompute splits now that totalCents is known
             if viewModel.splitMethod == .equal {
                 viewModel.computeEqualSplits()
+                viewModel.applyTipToSplits()
+            }
+            if viewModel.splitMethod == .percentage && viewModel.memberPercentages.isEmpty {
+                viewModel.initializeEqualPercentages()
             }
         }
     }
 
-    // MARK: - Equal Split Preview
+    // MARK: - Member Amount Preview (Equal)
 
-    private func equalSplitPreview(circle: TallyCircle) -> some View {
+    private var memberAmountPreview: some View {
         VStack(spacing: 0) {
             ForEach(Array(viewModel.splits.enumerated()), id: \.element.id) { index, split in
                 HStack(spacing: TallySpacing.md) {
-                    // Avatar initial circle
                     Text(String(split.memberName.prefix(1)).uppercased())
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 32, height: 32)
-                        .background(memberColor(for: index))
+                        .background(TallyColors.cardColor(for: index))
                         .clipShape(Circle())
 
                     Text(split.memberName)
@@ -90,7 +129,7 @@ struct PaySplitConfigView: View {
 
                     Spacer()
 
-                    Text(CentsFormatter.format(split.amountCents))
+                    Text(CentsFormatter.format(split.amountCents + split.tipCents))
                         .font(TallyFont.amounts)
                         .foregroundStyle(TallyColors.textPrimary)
                 }
@@ -105,8 +144,66 @@ struct PaySplitConfigView: View {
         }
     }
 
-    private func memberColor(for index: Int) -> Color {
-        TallyColors.cardColor(for: index)
+    // MARK: - Percentage Section (Inline)
+
+    private var percentageSection: some View {
+        VStack(spacing: 0) {
+            // Sliders
+            VStack(spacing: 0) {
+                ForEach(Array(viewModel.serverMembers.enumerated()), id: \.element.memberID) { index, member in
+                    PercentageRow(
+                        name: member.displayName.components(separatedBy: " ").first ?? member.displayName,
+                        color: TallyColors.cardColor(for: index),
+                        percentage: viewModel.memberPercentages[member.memberID] ?? 0
+                    ) { newValue in
+                        viewModel.updateMemberPercentage(memberId: member.memberID, to: newValue)
+                    }
+                    .overlay(alignment: .bottom) {
+                        if index < viewModel.serverMembers.count - 1 {
+                            Rectangle().fill(TallyColors.divider).frame(height: 0.5)
+                        }
+                    }
+                }
+            }
+            .background(TallyColors.bgPrimary)
+            .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
+            .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 3)
+
+            // Per-member amount preview
+            VStack(spacing: 0) {
+                ForEach(Array(viewModel.serverMembers.enumerated()), id: \.element.memberID) { index, member in
+                    let pct = viewModel.memberPercentages[member.memberID] ?? 0
+                    let cents = Int64((Double(viewModel.totalCents) * pct / 100.0).rounded())
+
+                    HStack(spacing: TallySpacing.md) {
+                        Text(String(member.displayName.prefix(1)).uppercased())
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 24, height: 24)
+                            .background(TallyColors.cardColor(for: index))
+                            .clipShape(Circle())
+
+                        Text(member.displayName)
+                            .font(TallyFont.body)
+                            .foregroundStyle(TallyColors.textPrimary)
+
+                        Spacer()
+
+                        Text(CentsFormatter.format(cents))
+                            .font(TallyFont.amounts)
+                            .foregroundStyle(TallyColors.textPrimary)
+                    }
+                    .padding(.vertical, TallySpacing.xs)
+
+                    if index < viewModel.serverMembers.count - 1 {
+                        Rectangle()
+                            .fill(TallyColors.divider)
+                            .frame(height: 0.5)
+                    }
+                }
+            }
+            .padding(.top, TallySpacing.xl)
+        }
     }
 
     // MARK: - Assignment Mode Section (Itemized)
@@ -145,8 +242,14 @@ struct PaySplitConfigView: View {
 
     private func handleContinue() {
         switch viewModel.splitMethod {
-        case .equal, .percentage:
+        case .equal:
             viewModel.computeEqualSplits()
+            viewModel.applyTipToSplits()
+            viewModel.push(.leaderApprove)
+
+        case .percentage:
+            viewModel.computePercentageSplits()
+            viewModel.applyTipToSplits()
             viewModel.push(.leaderApprove)
 
         case .itemized:

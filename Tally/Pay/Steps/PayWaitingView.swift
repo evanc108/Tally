@@ -62,6 +62,7 @@ struct PayWaitingView: View {
             // ── Bottom button (only when all confirmed) ─────────────────
             if showContinue {
                 Button("Continue") {
+                    viewModel.applyTipToSplits()
                     viewModel.push(.leaderApprove)
                 }
                 .buttonStyle(TallyPrimaryButtonStyle())

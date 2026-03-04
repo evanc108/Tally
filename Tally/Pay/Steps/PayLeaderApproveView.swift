@@ -49,6 +49,20 @@ struct PayLeaderApproveView: View {
                         }
                     }
 
+                    // ── Tip summary ────────────────────────────────────────
+                    if viewModel.receiptTipCents + viewModel.tipTotalCents > 0 {
+                        HStack {
+                            Text("Includes tip")
+                                .font(TallyFont.body)
+                                .foregroundStyle(TallyColors.textSecondary)
+                            Spacer()
+                            Text(CentsFormatter.format(viewModel.receiptTipCents + viewModel.tipTotalCents))
+                                .font(TallyFont.amounts)
+                                .foregroundStyle(TallyColors.accent)
+                        }
+                        .padding(.top, TallySpacing.lg)
+                    }
+
                     // ── Error message ───────────────────────────────────────
                     if let error = viewModel.error {
                         Text(error.errorDescription ?? "Something went wrong.")

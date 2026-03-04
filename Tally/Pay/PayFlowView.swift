@@ -52,6 +52,10 @@ struct PayFlowView: View {
             PayWaitingView(viewModel: viewModel)
                 .withPayBackButton { viewModel.pop() }
 
+        case .tipConfig:
+            PayTipConfigView(viewModel: viewModel)
+                .withPayBackButton { viewModel.pop() }
+
         case .leaderApprove:
             PayLeaderApproveView(viewModel: viewModel)
                 .withPayBackButton { viewModel.pop() }
@@ -63,6 +67,14 @@ struct PayFlowView: View {
         case .complete:
             PayCompleteView(viewModel: viewModel, onDone: { dismiss() })
                 .navigationBarBackButtonHidden()
+
+        case .walletConfirm:
+            PayWalletConfirmView(viewModel: viewModel, onDone: { dismiss() })
+                .withPayBackButton { viewModel.pop() }
+
+        case .percentageSplit:
+            PayPercentageSplitView(viewModel: viewModel)
+                .withPayBackButton { viewModel.pop() }
         }
     }
 }

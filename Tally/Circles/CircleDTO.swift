@@ -15,6 +15,17 @@ struct MeResponseDTO: Decodable {
 
 // MARK: - Create Circle
 
+/// A member to create alongside the group.
+struct CreateGroupMemberDTO: Encodable {
+    let displayName: String
+    let splitWeight: Double
+
+    enum CodingKeys: String, CodingKey {
+        case displayName = "display_name"
+        case splitWeight = "split_weight"
+    }
+}
+
 /// Request body for POST /v1/groups
 struct CreateCircleRequestDTO: Encodable {
     /// Slug — lowercase, hyphenated (e.g. "weekend-in-nashville")
@@ -22,11 +33,14 @@ struct CreateCircleRequestDTO: Encodable {
     /// Human-readable label shown in the iOS UI
     let displayName: String
     let currency: String
+    /// Additional members (beyond the creator) to create in the same transaction.
+    let members: [CreateGroupMemberDTO]
 
     enum CodingKeys: String, CodingKey {
         case name
         case displayName = "display_name"
         case currency
+        case members
     }
 }
 
@@ -64,6 +78,7 @@ struct CircleSummaryDTO: Decodable {
     let myCardLastFour: String?
     let myCardType: String?
     let createdAt: String
+    let archivedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case groupID        = "group_id"
@@ -74,6 +89,7 @@ struct CircleSummaryDTO: Decodable {
         case myCardLastFour = "my_card_last_four"
         case myCardType     = "my_card_type"
         case createdAt      = "created_at"
+        case archivedAt     = "archived_at"
     }
 }
 

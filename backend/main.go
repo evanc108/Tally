@@ -184,8 +184,12 @@ func main() {
 		receiptGroup.Use(middleware.RateLimit(rdb, 30, time.Minute))
 		receiptGroup.POST("/parse", receiptHandler.ParseReceipt)
 
+		// ── WebSocket for real-time session updates ──────────────────────
+		wsManager := ws.NewManager()
+		wsHandler := ws.NewWSHandler(wsManager)
+
 		// ── Receipt persistence (per-group, member-scoped) ───────────────
-		receiptStore := receipts.NewStoreHandler(pool)
+		receiptStore := receipts.NewStoreHandler(pool, wsManager)
 		groupMember.POST("/receipts", receiptStore.SaveReceipt)
 		groupMember.GET("/receipts/:receiptId", receiptStore.GetReceipt)
 		groupMember.PUT("/receipts/:receiptId/items/:itemId/claim", receiptStore.ClaimItem)
@@ -195,7 +199,7 @@ func main() {
 		groupLeader.POST("/receipts/:receiptId/items/assign", receiptStore.AssignItems)
 
 		// ── Payment sessions ─────────────────────────────────────────────
-		payHandler := paysession.NewHandler(pool)
+		payHandler := paysession.NewHandler(pool, wsManager)
 		groupMember.POST("/sessions", payHandler.CreateSession)
 		groupMember.GET("/sessions/active", payHandler.GetActiveSession)
 		groupMember.GET("/sessions/:sessionId", payHandler.GetSession)
@@ -205,10 +209,6 @@ func main() {
 		groupMember.POST("/sessions/:sessionId/confirm", payHandler.ConfirmSplit)
 		groupMember.POST("/sessions/:sessionId/approve", payHandler.ApproveSession)
 		groupMember.POST("/sessions/:sessionId/simulate-tap", payHandler.SimulateTap)
-
-		// ── WebSocket for real-time session updates ──────────────────────
-		wsManager := ws.NewManager()
-		wsHandler := ws.NewWSHandler(wsManager)
 		groupMember.GET("/sessions/:sessionId/ws", wsHandler.HandleUpgrade)
 	}
 

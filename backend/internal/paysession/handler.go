@@ -19,6 +19,7 @@ import (
 	"github.com/tally/backend/internal/ledger"
 	"github.com/tally/backend/internal/middleware"
 	"github.com/tally/backend/internal/waterfall"
+	"github.com/tally/backend/internal/ws"
 )
 
 // ── Request / Response types ────────────────────────────────────────────────
@@ -85,11 +86,22 @@ type simulateTapResponse struct {
 
 // Handler handles payment session routes.
 type Handler struct {
-	db *sql.DB
+	db        *sql.DB
+	wsManager *ws.Manager
 }
 
-func NewHandler(db *sql.DB) *Handler {
-	return &Handler{db: db}
+func NewHandler(db *sql.DB, wsManager *ws.Manager) *Handler {
+	return &Handler{db: db, wsManager: wsManager}
+}
+
+// broadcastSession sends an event to all WebSocket clients for the given session.
+func (h *Handler) broadcastSession(sessionID string, evt ws.Event) {
+	if h.wsManager == nil {
+		return
+	}
+	if hub := h.wsManager.Get(sessionID); hub != nil {
+		hub.Broadcast(evt)
+	}
 }
 
 // terminalStatuses are session states from which no further transitions are allowed.
@@ -433,6 +445,12 @@ func (h *Handler) UpdateSession(c *gin.Context) {
 
 	// Return the updated session.
 	h.returnSession(c, sessionID, groupID)
+
+	// Broadcast session_updated to WebSocket clients.
+	h.broadcastSession(sessionID.String(), ws.Event{
+		Type:    ws.EventSessionUpdated,
+		Payload: gin.H{"session_id": sessionID.String()},
+	})
 }
 
 // ── DELETE /v1/groups/:id/sessions/:sessionId ───────────────────────────────
@@ -605,6 +623,12 @@ func (h *Handler) SetSplits(c *gin.Context) {
 
 	// Return the full updated session (with splits embedded).
 	h.returnSession(c, sessionID, groupID)
+
+	// Broadcast splits_updated to WebSocket clients.
+	h.broadcastSession(sessionID.String(), ws.Event{
+		Type:    ws.EventSplitsUpdated,
+		Payload: gin.H{"session_id": sessionID.String()},
+	})
 }
 
 // ── POST /v1/groups/:id/sessions/:sessionId/confirm ─────────────────────────
@@ -675,6 +699,15 @@ func (h *Handler) ConfirmSplit(c *gin.Context) {
 		"session_id", sessionID, "member_id", memberID)
 
 	c.JSON(http.StatusOK, gin.H{"confirmed": true})
+
+	// Broadcast member_confirmed to WebSocket clients.
+	h.broadcastSession(sessionID.String(), ws.Event{
+		Type: ws.EventMemberConfirmed,
+		Payload: gin.H{
+			"session_id": sessionID.String(),
+			"member_id":  memberID.String(),
+		},
+	})
 }
 
 // ── POST /v1/groups/:id/sessions/:sessionId/approve ─────────────────────────
@@ -746,6 +779,12 @@ func (h *Handler) ApproveSession(c *gin.Context) {
 		"session_id", sessionID, "group_id", groupID, "expires_at", expiresAt)
 
 	h.returnSession(c, sessionID, groupID)
+
+	// Broadcast session_updated to WebSocket clients.
+	h.broadcastSession(sessionID.String(), ws.Event{
+		Type:    ws.EventSessionUpdated,
+		Payload: gin.H{"session_id": sessionID.String(), "status": "ready"},
+	})
 }
 
 // ── POST /v1/groups/:id/sessions/:sessionId/simulate-tap ────────────────────

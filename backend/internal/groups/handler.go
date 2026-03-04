@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -23,10 +24,16 @@ func NewHandler(db *sql.DB) *Handler {
 
 // ── POST /v1/groups ───────────────────────────────────────────────────────────
 
+type createGroupMember struct {
+	DisplayName string  `json:"display_name" binding:"required"`
+	SplitWeight float64 `json:"split_weight"`
+}
+
 type createGroupRequest struct {
-	Name        string `json:"name"         binding:"required"`
-	Currency    string `json:"currency"`
-	DisplayName string `json:"display_name" binding:"required"`
+	Name        string             `json:"name"         binding:"required"`
+	Currency    string             `json:"currency"`
+	DisplayName string             `json:"display_name" binding:"required"`
+	Members     []createGroupMember `json:"members"` // optional additional members
 }
 
 type createGroupResponse struct {
@@ -103,11 +110,45 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 		return
 	}
 
+	// Look up the creator's real name from the users table.
+	var firstName, lastName string
+	_ = tx.QueryRowContext(c.Request.Context(),
+		`SELECT first_name, last_name FROM users WHERE id = $1`, userID,
+	).Scan(&firstName, &lastName)
+	creatorName := strings.TrimSpace(firstName + " " + lastName)
+	if creatorName == "" {
+		creatorName = req.DisplayName // fallback to group name if user has no name
+	}
+
+	// Determine the creator's split weight based on whether additional members are provided.
+	totalMembers := 1 + len(req.Members) // creator + additional members
+	creatorWeight := 1.0
+	if len(req.Members) > 0 {
+		// Check if members have explicit weights; if not, distribute equally.
+		hasExplicitWeights := false
+		for _, m := range req.Members {
+			if m.SplitWeight > 0 {
+				hasExplicitWeights = true
+				break
+			}
+		}
+		if hasExplicitWeights {
+			// Sum member weights and give the remainder to the creator.
+			var memberWeightSum float64
+			for _, m := range req.Members {
+				memberWeightSum += m.SplitWeight
+			}
+			creatorWeight = math.Max(1.0-memberWeightSum, 0)
+		} else {
+			creatorWeight = 1.0 / float64(totalMembers)
+		}
+	}
+
 	// Add the creator as the first member and leader.
 	if _, err := tx.ExecContext(c.Request.Context(), `
 		INSERT INTO members (id, group_id, user_id, display_name, split_weight, is_leader)
-		VALUES ($1, $2, $3, $4, 1.0, true)`,
-		memberID, groupID, userID, req.DisplayName,
+		VALUES ($1, $2, $3, $4, $5, true)`,
+		memberID, groupID, userID, creatorName, creatorWeight,
 	); err != nil {
 		slog.ErrorContext(c.Request.Context(), "create creator member failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
@@ -123,12 +164,53 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 		return
 	}
 
+	// Add additional members (if provided).
+	for i, m := range req.Members {
+		extraMemberID := uuid.New()
+		extraAccountID := uuid.New()
+		// Generate a placeholder user ID for non-registered members.
+		placeholderUserID := "placeholder-" + extraMemberID.String()
+
+		// Ensure a user row exists for the placeholder.
+		if _, err := tx.ExecContext(c.Request.Context(),
+			`INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, placeholderUserID,
+		); err != nil {
+			slog.ErrorContext(c.Request.Context(), "create placeholder user failed", "index", i, "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+			return
+		}
+
+		weight := m.SplitWeight
+		if weight <= 0 {
+			weight = 1.0 / float64(totalMembers)
+		}
+
+		if _, err := tx.ExecContext(c.Request.Context(), `
+			INSERT INTO members (id, group_id, user_id, display_name, split_weight, is_leader)
+			VALUES ($1, $2, $3, $4, $5, false)`,
+			extraMemberID, groupID, placeholderUserID, m.DisplayName, weight,
+		); err != nil {
+			slog.ErrorContext(c.Request.Context(), "create member failed", "index", i, "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+			return
+		}
+
+		if _, err := tx.ExecContext(c.Request.Context(),
+			`INSERT INTO accounts (id, owner_id, owner_type, account_type) VALUES ($1, $2, 'member', 'asset')`,
+			extraAccountID, extraMemberID,
+		); err != nil {
+			slog.ErrorContext(c.Request.Context(), "create member account failed", "index", i, "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+			return
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "commit failed"})
 		return
 	}
 
-	slog.InfoContext(c.Request.Context(), "group created", "group_id", groupID, "creator_member_id", memberID)
+	slog.InfoContext(c.Request.Context(), "group created", "group_id", groupID, "creator_member_id", memberID, "total_members", totalMembers)
 	c.JSON(http.StatusCreated, createGroupResponse{
 		GroupID:   groupID.String(),
 		Name:      req.Name,
@@ -400,12 +482,15 @@ func (h *Handler) GetGroup(c *gin.Context) {
 	}
 
 	rows, err := h.db.QueryContext(c.Request.Context(), `
-		SELECT id, display_name, split_weight::float8, tally_balance_cents, is_leader,
-		       (card_token IS NOT NULL) AS has_card,
-		       kyc_status
-		FROM members
-		WHERE group_id = $1
-		ORDER BY is_leader DESC, display_name ASC`,
+		SELECT m.id,
+		       COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), m.display_name) AS display_name,
+		       m.split_weight::float8, m.tally_balance_cents, m.is_leader,
+		       (m.card_token IS NOT NULL) AS has_card,
+		       m.kyc_status
+		FROM members m
+		LEFT JOIN users u ON m.user_id = u.id
+		WHERE m.group_id = $1
+		ORDER BY m.is_leader DESC, m.display_name ASC`,
 		groupID,
 	)
 	if err != nil {

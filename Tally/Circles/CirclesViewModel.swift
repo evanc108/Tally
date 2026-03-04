@@ -1,3 +1,4 @@
+import ClerkKit
 import Foundation
 
 @Observable
@@ -89,10 +90,22 @@ final class CirclesViewModel {
             .lowercased()
             .replacingOccurrences(of: " ", with: "-")
 
+        // Build member list from the local state (excludes the creator — backend adds them automatically).
+        let totalPeople = Double(state.members.count + 1) // +1 for the creator
+        let memberDTOs = state.members.map { member in
+            CreateGroupMemberDTO(
+                displayName: member.name,
+                splitWeight: member.splitPercentage > 0
+                    ? member.splitPercentage / 100.0
+                    : 1.0 / totalPeople
+            )
+        }
+
         let req = CreateCircleRequestDTO(
             name: slug,
             displayName: state.circleName,
-            currency: "USD"
+            currency: "USD",
+            members: memberDTOs
         )
         let response: CreateCircleResponseDTO = try await APIClient.shared.post(
             path: "/v1/groups",
@@ -159,6 +172,9 @@ final class CirclesViewModel {
     // MARK: - Private
 
     private func ensureUser() async throws {
-        let _: MeResponseDTO = try await APIClient.shared.post(path: "/v1/users/me")
+        let first = Clerk.shared.user?.firstName ?? ""
+        let last = Clerk.shared.user?.lastName ?? ""
+        let body = ["first_name": first, "last_name": last]
+        let _: MeResponseDTO = try await APIClient.shared.post(path: "/v1/users/me", body: body)
     }
 }

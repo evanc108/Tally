@@ -10,7 +10,6 @@ struct SaveReceiptRequestDTO: Encodable {
     let totalCents: Int64
     let currency: String
     let merchantName: String
-    let rawText: String?
     let items: [ReceiptItemDTO]
 
     enum CodingKeys: String, CodingKey {
@@ -20,7 +19,6 @@ struct SaveReceiptRequestDTO: Encodable {
         case totalCents    = "total_cents"
         case currency
         case merchantName  = "merchant_name"
-        case rawText       = "raw_text"
         case items
     }
 }
@@ -144,14 +142,20 @@ struct ParsedReceiptItemDTO: Decodable {
 extension PayReceipt {
     /// Maps the parsed receipt data from the parse endpoint into a PayReceipt domain model.
     /// Computes a fallback total from items + tax + tip if the backend total is nil/zero.
+    private static var todayISO: String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f.string(from: Date())
+    }
+
     init(fromParsed dto: ParsedReceiptDataDTO) {
         self.id            = UUID()
         self.serverId      = nil
-        self.taxCents      = dto.taxCents ?? 0
         self.tipCents      = dto.tipCents ?? 0
         self.currency      = "USD"
         self.merchantName  = dto.merchantName ?? ""
-        self.receiptDate   = dto.receiptDate
+        self.receiptDate   = (dto.receiptDate?.isEmpty == false) ? dto.receiptDate : Self.todayISO
         self.confidence    = dto.confidence
         self.warnings      = dto.warnings ?? []
         self.items         = dto.items.map { item in
@@ -170,7 +174,12 @@ extension PayReceipt {
         // Use explicit total or compute from subtotal + tax + tip
         if let total = dto.totalCents, total > 0 {
             self.totalCents = total
+            // Derive tax from total when available — more reliable than parser's
+            // tax value since parsers often miss multi-line taxes (e.g. TIF + HST).
+            let derived = self.totalCents - self.subtotalCents - self.tipCents
+            self.taxCents = derived > 0 ? derived : (dto.taxCents ?? 0)
         } else {
+            self.taxCents = dto.taxCents ?? 0
             self.totalCents = self.subtotalCents + self.taxCents + self.tipCents
         }
     }
@@ -181,11 +190,10 @@ extension PayReceipt {
     init(fromOnDevice output: ParsedReceiptOutput) {
         self.id            = UUID()
         self.serverId      = nil
-        self.taxCents      = Int64(output.taxCents ?? 0)
         self.tipCents      = Int64(output.tipCents ?? 0)
         self.currency      = "USD"
         self.merchantName  = output.merchantName ?? ""
-        self.receiptDate   = output.receiptDate
+        self.receiptDate   = (output.receiptDate?.isEmpty == false) ? output.receiptDate : Self.todayISO
         self.confidence    = 1.0
         self.warnings      = []
         self.items         = output.items.map { item in
@@ -203,7 +211,12 @@ extension PayReceipt {
 
         if let total = output.totalCents, total > 0 {
             self.totalCents = Int64(total)
+            // Derive tax from total when available — more reliable than parser's
+            // tax value since parsers often miss multi-line taxes (e.g. TIF + HST).
+            let derived = self.totalCents - self.subtotalCents - self.tipCents
+            self.taxCents = derived > 0 ? derived : Int64(output.taxCents ?? 0)
         } else {
+            self.taxCents = Int64(output.taxCents ?? 0)
             self.totalCents = self.subtotalCents + self.taxCents + self.tipCents
         }
     }

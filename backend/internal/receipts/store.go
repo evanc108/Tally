@@ -8,16 +8,37 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/tally/backend/internal/ws"
 )
 
 // StoreHandler handles receipt persistence and item assignment routes.
 type StoreHandler struct {
-	db *sql.DB
+	db        *sql.DB
+	wsManager *ws.Manager
 }
 
 // NewStoreHandler returns a StoreHandler backed by the given database.
-func NewStoreHandler(db *sql.DB) *StoreHandler {
-	return &StoreHandler{db: db}
+func NewStoreHandler(db *sql.DB, wsManager *ws.Manager) *StoreHandler {
+	return &StoreHandler{db: db, wsManager: wsManager}
+}
+
+// broadcastReceiptEvent finds the active payment session for a receipt and
+// broadcasts an event to all connected WebSocket clients.
+func (h *StoreHandler) broadcastReceiptEvent(receiptID uuid.UUID, evt ws.Event) {
+	if h.wsManager == nil {
+		return
+	}
+	var sessionID string
+	err := h.db.QueryRow(
+		`SELECT id FROM payment_sessions WHERE receipt_id = $1 AND status NOT IN ('completed','cancelled','expired') LIMIT 1`,
+		receiptID,
+	).Scan(&sessionID)
+	if err != nil {
+		return // no active session — nothing to broadcast
+	}
+	if hub := h.wsManager.Get(sessionID); hub != nil {
+		hub.Broadcast(evt)
+	}
 }
 
 // ── Request / response types (unexported) ────────────────────────────────────
@@ -36,7 +57,6 @@ type saveReceiptRequest struct {
 	TotalCents    int64                    `json:"total_cents"`
 	Currency      string                   `json:"currency"`
 	MerchantName  string                   `json:"merchant_name"`
-	RawText       string                   `json:"raw_text"`
 	Items         []saveReceiptItemRequest `json:"items" binding:"required,dive"`
 }
 
@@ -95,7 +115,6 @@ type getReceiptResponse struct {
 	Currency      string                   `json:"currency"`
 	MerchantName  string                   `json:"merchant_name"`
 	Status        string                   `json:"status"`
-	RawText       string                   `json:"raw_text"`
 	Items         []getReceiptItemResponse `json:"items"`
 	CreatedAt     string                   `json:"created_at"`
 	UpdatedAt     string                   `json:"updated_at"`
@@ -193,12 +212,12 @@ func (h *StoreHandler) SaveReceipt(c *gin.Context) {
 
 	var createdAt time.Time
 	if err := tx.QueryRowContext(c.Request.Context(), `
-		INSERT INTO receipts (id, group_id, created_by_user_id, subtotal_cents, tax_cents, tip_cents, total_cents, currency, merchant_name, status, raw_text)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', $10)
+		INSERT INTO receipts (id, group_id, created_by_user_id, subtotal_cents, tax_cents, tip_cents, total_cents, currency, merchant_name, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft')
 		RETURNING created_at`,
 		receiptID, groupID, createdByUserID,
 		req.SubtotalCents, req.TaxCents, req.TipCents, req.TotalCents,
-		currency, req.MerchantName, req.RawText,
+		currency, req.MerchantName,
 	).Scan(&createdAt); err != nil {
 		slog.ErrorContext(c.Request.Context(), "insert receipt failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
@@ -269,18 +288,18 @@ func (h *StoreHandler) GetReceipt(c *gin.Context) {
 	}
 
 	var resp getReceiptResponse
-	var merchantName, rawText sql.NullString
+	var merchantName sql.NullString
 	var createdAt, updatedAt time.Time
 	err = h.db.QueryRowContext(c.Request.Context(), `
 		SELECT id, group_id, COALESCE(subtotal_cents, 0), COALESCE(tax_cents, 0),
 		       COALESCE(tip_cents, 0), COALESCE(total_cents, 0), currency,
-		       merchant_name, status, raw_text, created_at, updated_at
+		       merchant_name, status, created_at, updated_at
 		FROM receipts
 		WHERE id = $1 AND group_id = $2 AND status != 'deleted'`,
 		receiptID, groupID,
 	).Scan(&resp.ID, &resp.GroupID, &resp.SubtotalCents, &resp.TaxCents,
 		&resp.TipCents, &resp.TotalCents, &resp.Currency,
-		&merchantName, &resp.Status, &rawText, &createdAt, &updatedAt)
+		&merchantName, &resp.Status, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "receipt not found"})
 		return
@@ -292,9 +311,6 @@ func (h *StoreHandler) GetReceipt(c *gin.Context) {
 
 	if merchantName.Valid {
 		resp.MerchantName = merchantName.String
-	}
-	if rawText.Valid {
-		resp.RawText = rawText.String
 	}
 	resp.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	resp.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
@@ -491,6 +507,12 @@ func (h *StoreHandler) ClaimItem(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, item)
+
+	// Broadcast item_claimed event to WebSocket clients.
+	h.broadcastReceiptEvent(receiptID, ws.Event{
+		Type:    ws.EventItemClaimed,
+		Payload: item,
+	})
 }
 
 // ── DELETE /v1/groups/:id/receipts/:receiptId/items/:itemId/claim ────────────
@@ -549,6 +571,15 @@ func (h *StoreHandler) ReleaseClaim(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"released": true})
+
+	// Broadcast item_released event to WebSocket clients.
+	h.broadcastReceiptEvent(receiptID, ws.Event{
+		Type: ws.EventItemReleased,
+		Payload: gin.H{
+			"item_id":   itemID.String(),
+			"member_id": memberID.String(),
+		},
+	})
 }
 
 // ── POST /v1/groups/:id/receipts/:receiptId/items/assign ─────────────────────
@@ -774,6 +805,15 @@ func (h *StoreHandler) ConfirmSelections(c *gin.Context) {
 
 	slog.InfoContext(c.Request.Context(), "selections confirmed", "receipt_id", receiptID, "member_id", memberID, "items", len(claimed))
 	c.JSON(http.StatusOK, gin.H{"confirmed": len(claimed)})
+
+	// Broadcast member_confirmed event to WebSocket clients.
+	h.broadcastReceiptEvent(receiptID, ws.Event{
+		Type: ws.EventMemberConfirmed,
+		Payload: gin.H{
+			"member_id": memberID.String(),
+			"items":     len(claimed),
+		},
+	})
 }
 
 // ── GET /v1/groups/:id/receipts/:receiptId/confirmations ─────────────────────

@@ -270,9 +270,12 @@ enum PayFlowRoute: Hashable {
     case leaderAssign
     case memberSelect
     case waiting
+    case tipConfig
     case leaderApprove
     case cardReady
     case complete
+    case walletConfirm
+    case percentageSplit
 }
 
 // MARK: - Payment Method

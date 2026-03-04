@@ -51,7 +51,11 @@ ITEMS:
 - Only include actual purchased products (food, drinks, goods).
 - Each item has: name, quantity (default 1), unit_cents, total_cents.
 - unit_cents = total_cents / quantity (integer division).
-- NEVER include these as items: subtotal, tax, tip, gratuity, total, amount due, balance due, service charge, payment method, card numbers, change due, transaction lines.
+- CRITICAL: Each item's price is the dollar amount on the SAME line (or tab-separated column) as the item name. Match each price to the item in its row — NEVER shift prices between lines.
+- WEIGHTED/BULK ITEMS: Lines like "0.65 lb @ $0.59 /lb" followed by "BANANAS YELLOW 0.38" mean the item total is $0.38 (weight × price-per-unit). Use the final price on the item line as total_cents, NOT the per-unit rate. quantity = 1 for weighted items.
+- KIOSK/GROCERY RECEIPTS: Letters after prices (e.g. "4.69 B", "0.38 S", "1.99 F") are tax category codes, NOT part of the price. Ignore them.
+- SNAP/EBT lines: "SNAP Total" or "EBT" are payment method lines, NOT items. Exclude them.
+- NEVER include these as items: subtotal, tax, tip, gratuity, total, amount due, balance due, service charge, payment method, card numbers, change due, transaction lines, SNAP total, EBT balance.
 - NEVER include percentage lines (e.g. "18%%", "18%% Grat") as items. Those are gratuity rates.
 - If a line shows a percentage with a dollar amount (e.g. "18%% Grat $39.06"), the dollar amount is the tip, NOT an item.
 

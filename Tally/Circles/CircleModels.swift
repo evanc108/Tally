@@ -19,7 +19,11 @@ struct TallyCircle: Identifiable {
     var walletBalance: Double
     var myCardLastFour: String?
     var myCardType: String?
+    var archivedAt: Date?
     var createdAt: Date
+
+    /// Whether this circle has been archived (soft-deleted).
+    var isArchived: Bool { archivedAt != nil }
 
     /// Authoritative member count — prefers server value over local.
     var memberCount: Int {
@@ -60,6 +64,7 @@ struct TallyCircle: Identifiable {
         walletBalance: Double = 0,
         myCardLastFour: String? = nil,
         myCardType: String? = nil,
+        archivedAt: Date? = nil,
         createdAt: Date
     ) {
         self.id                = UUID()
@@ -73,6 +78,7 @@ struct TallyCircle: Identifiable {
         self.walletBalance     = walletBalance
         self.myCardLastFour    = myCardLastFour
         self.myCardType        = myCardType
+        self.archivedAt        = archivedAt
         self.createdAt         = createdAt
     }
 }
@@ -80,6 +86,7 @@ struct TallyCircle: Identifiable {
 extension TallyCircle {
     /// Maps a summary DTO from GET /v1/groups into a TallyCircle.
     init(from dto: CircleSummaryDTO) {
+        let isoFormatter = ISO8601DateFormatter()
         self.init(
             serverId: dto.groupID,
             name: dto.displayName ?? dto.name,
@@ -89,7 +96,8 @@ extension TallyCircle {
             transactions: [],
             myCardLastFour: dto.myCardLastFour,
             myCardType: dto.myCardType,
-            createdAt: ISO8601DateFormatter().date(from: dto.createdAt) ?? .now
+            archivedAt: dto.archivedAt.flatMap { isoFormatter.date(from: $0) },
+            createdAt: isoFormatter.date(from: dto.createdAt) ?? .now
         )
     }
 }
@@ -182,10 +190,12 @@ final class CreateCircleState {
     var totalPeople: Int { members.count + 1 }
 
     func initializeEqualPercentages() {
-        let share = 100.0 / Double(totalPeople)
-        youPercentage = share
+        let base = Int(100 / totalPeople)
+        let remainder = 100 - base * totalPeople
+        // "You" gets the first slot for remainder distribution
+        youPercentage = Double(base + (0 < remainder ? 1 : 0))
         for i in members.indices {
-            members[i].splitPercentage = share
+            members[i].splitPercentage = Double(base + ((i + 1) < remainder ? 1 : 0))
         }
     }
 
@@ -193,7 +203,7 @@ final class CreateCircleState {
     /// redistribute the remainder proportionally among the others (including You).
     func updatePercentage(forMemberAt index: Int, to newValue: Double) {
         let old = members[index].splitPercentage
-        let clamped = min(max(newValue, 0), 100)
+        let clamped = min(max(newValue.rounded(), 0), 100)
         members[index].splitPercentage = clamped
 
         let delta = clamped - old
@@ -209,13 +219,22 @@ final class CreateCircleState {
         let othersTotal = otherShares.reduce(0.0) { $0 + $1.value }
         let newOthersTotal = max(othersTotal - delta, 0)
 
-        for (j, share) in otherShares.enumerated() {
+        // Distribute with rounding, then fix remainder on the largest share
+        var newValues = otherShares.map { share -> Double in
             let proportion = othersTotal > 0 ? share.value / othersTotal : 1.0 / Double(otherShares.count)
-            let newVal = max(newOthersTotal * proportion, 0)
+            return max((newOthersTotal * proportion).rounded(), 0)
+        }
+        let roundedSum = newValues.reduce(0.0, +)
+        let diff = newOthersTotal - roundedSum
+        if diff != 0, let maxIdx = newValues.indices.max(by: { newValues[$0] < newValues[$1] }) {
+            newValues[maxIdx] += diff
+        }
+
+        for (j, share) in otherShares.enumerated() {
             if share.isYou {
-                youPercentage = newVal
+                youPercentage = newValues[j]
             } else {
-                members[otherShares[j].index].splitPercentage = newVal
+                members[otherShares[j].index].splitPercentage = newValues[j]
             }
         }
     }
@@ -223,7 +242,7 @@ final class CreateCircleState {
     /// When "You" percentage changes
     func updateYouPercentage(to newValue: Double) {
         let old = youPercentage
-        let clamped = min(max(newValue, 0), 100)
+        let clamped = min(max(newValue.rounded(), 0), 100)
         youPercentage = clamped
 
         let delta = clamped - old
@@ -232,9 +251,18 @@ final class CreateCircleState {
         let othersTotal = members.reduce(0.0) { $0 + $1.splitPercentage }
         let newOthersTotal = max(othersTotal - delta, 0)
 
-        for i in members.indices {
+        var newValues = members.indices.map { i -> Double in
             let proportion = othersTotal > 0 ? members[i].splitPercentage / othersTotal : 1.0 / Double(members.count)
-            members[i].splitPercentage = max(newOthersTotal * proportion, 0)
+            return max((newOthersTotal * proportion).rounded(), 0)
+        }
+        let roundedSum = newValues.reduce(0.0, +)
+        let diff = newOthersTotal - roundedSum
+        if diff != 0, let maxIdx = newValues.indices.max(by: { newValues[$0] < newValues[$1] }) {
+            newValues[maxIdx] += diff
+        }
+
+        for i in members.indices {
+            members[i].splitPercentage = newValues[i]
         }
     }
 

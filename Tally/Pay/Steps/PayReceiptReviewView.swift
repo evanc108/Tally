@@ -50,7 +50,7 @@ struct PayReceiptReviewView: View {
 
             // ── Pinned bottom button ────────────────────────────────────────
             Button("Continue") {
-                viewModel.push(.splitConfig)
+                viewModel.push(.tipConfig)
             }
             .buttonStyle(TallyPrimaryButtonStyle())
             .disabled(receipt == nil)

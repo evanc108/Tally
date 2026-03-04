@@ -3,23 +3,30 @@ import SwiftUI
 struct PayLeaderAssignView: View {
     @Bindable var viewModel: PayFlowViewModel
 
-    @State private var selectedItemId: UUID?
     @State private var assignments: [UUID: String] = [:]   // itemId -> memberId
 
-    private var items: [PayReceiptItem] {
-        viewModel.receipt?.items ?? []
+    /// Only items with a non-zero price are assignable.
+    private var allocatableItems: [PayReceiptItem] {
+        (viewModel.receipt?.items ?? []).filter { $0.totalCents > 0 }
     }
 
-    private var members: [PaySplit] {
-        viewModel.splits
+    private var members: [GroupMemberDTO] {
+        viewModel.serverMembers
     }
 
     /// Running total per member (cents) based on current local assignments.
     private func memberTotal(for memberId: String) -> Int64 {
         assignments
             .filter { $0.value == memberId }
-            .compactMap { kvp in items.first(where: { $0.id == kvp.key })?.totalCents }
+            .compactMap { kvp in allocatableItems.first(where: { $0.id == kvp.key })?.totalCents }
             .reduce(0, +)
+    }
+
+    /// Total cents not yet assigned to any member.
+    private var unassignedTotal: Int64 {
+        allocatableItems
+            .filter { assignments[$0.id] == nil }
+            .reduce(0) { $0 + $1.totalCents }
     }
 
     var body: some View {
@@ -32,35 +39,22 @@ struct PayLeaderAssignView: View {
                         .foregroundStyle(TallyColors.textPrimary)
                         .padding(.top, TallySpacing.sm)
 
-                    Text("Tap an item, then tap a member to assign it.")
+                    Text("Tap a member on each item to assign it.")
                         .font(TallyFont.body)
                         .foregroundStyle(TallyColors.textSecondary)
                         .padding(.top, TallySpacing.sm)
 
-                    // ── Member chips (horizontal scroll) ────────────────────
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: TallySpacing.md) {
-                            ForEach(Array(members.enumerated()), id: \.element.id) { index, member in
-                                memberChip(member: member, index: index)
-                            }
-                        }
-                        .padding(.vertical, TallySpacing.sm)
-                    }
-                    .padding(.top, TallySpacing.lg)
-
-                    // ── Receipt items ───────────────────────────────────────
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                            itemRow(item: item, index: index)
-
-                            if index < items.count - 1 {
-                                Rectangle()
-                                    .fill(TallyColors.divider)
-                                    .frame(height: 0.5)
-                            }
+                    // ── Receipt items with inline member assignment ────────
+                    LazyVStack(spacing: TallySpacing.md) {
+                        ForEach(allocatableItems) { item in
+                            itemCard(item: item)
                         }
                     }
-                    .padding(.top, TallySpacing.lg)
+                    .padding(.top, TallySpacing.xl)
+
+                    // ── Per-member summary ─────────────────────────────────
+                    memberSummary
+                        .padding(.top, TallySpacing.xl)
                 }
                 .padding(.horizontal, TallySpacing.screenPadding)
                 .padding(.bottom, TallySpacing.lg)
@@ -68,7 +62,7 @@ struct PayLeaderAssignView: View {
 
             // ── Pinned bottom button ────────────────────────────────────────
             Button("Continue") {
-                viewModel.push(.leaderApprove)
+                handleContinue()
             }
             .buttonStyle(TallyPrimaryButtonStyle())
             .padding(.horizontal, TallySpacing.screenPadding)
@@ -77,64 +71,22 @@ struct PayLeaderAssignView: View {
         .background(TallyColors.bgPrimary)
     }
 
-    // MARK: - Member Chip
+    // MARK: - Continue
 
-    private func memberChip(member: PaySplit, index: Int) -> some View {
-        let isTarget = selectedItemId != nil
-        let total = memberTotal(for: member.memberId)
-
-        return Button {
-            guard let itemId = selectedItemId else { return }
-            // Toggle: if already assigned to this member, unassign
-            if assignments[itemId] == member.memberId {
-                assignments.removeValue(forKey: itemId)
-            } else {
-                assignments[itemId] = member.memberId
-            }
-            selectedItemId = nil
-        } label: {
-            VStack(spacing: TallySpacing.xs) {
-                Text(String(member.memberName.prefix(1)).uppercased())
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(TallyColors.ink)
-                    .frame(width: 36, height: 36)
-                    .background(TallyColors.cardColor(for: index))
-                    .clipShape(Circle())
-                    .overlay(
-                        Circle()
-                            .stroke(TallyColors.accent, lineWidth: isTarget ? 2 : 0)
-                    )
-
-                Text(member.memberName.components(separatedBy: " ").first ?? member.memberName)
-                    .font(TallyFont.caption)
-                    .foregroundStyle(TallyColors.textSecondary)
-                    .lineLimit(1)
-
-                if total > 0 {
-                    Text(CentsFormatter.format(total))
-                        .font(TallyFont.caption)
-                        .foregroundStyle(TallyColors.accent)
-                }
-            }
-            .frame(minWidth: 64)
-        }
-        .buttonStyle(.plain)
+    private func handleContinue() {
+        viewModel.computeItemizedSplits(assignments: assignments, items: allocatableItems)
+        viewModel.applyTipToSplits()
+        viewModel.push(.leaderApprove)
     }
 
-    // MARK: - Item Row
+    // MARK: - Item Card
 
-    private func itemRow(item: PayReceiptItem, index: Int) -> some View {
-        let isSelected = selectedItemId == item.id
+    private func itemCard(item: PayReceiptItem) -> some View {
         let assignedMemberId = assignments[item.id]
-        let assignedMember = assignedMemberId.flatMap { mid in members.first(where: { $0.memberId == mid }) }
-        let assignedIndex = assignedMemberId.flatMap { mid in members.firstIndex(where: { $0.memberId == mid }) }
 
-        return Button {
-            withAnimation(.spring(response: 0.2)) {
-                selectedItemId = isSelected ? nil : item.id
-            }
-        } label: {
-            HStack(spacing: TallySpacing.lg) {
+        return VStack(alignment: .leading, spacing: TallySpacing.md) {
+            // Item name + price
+            HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.name)
                         .font(TallyFont.bodySemibold)
@@ -150,26 +102,104 @@ struct PayLeaderAssignView: View {
 
                 Spacer()
 
-                // Assigned member badge
-                if let member = assignedMember, let idx = assignedIndex {
-                    Text(String(member.memberName.prefix(1)).uppercased())
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(TallyColors.ink)
-                        .frame(width: 24, height: 24)
-                        .background(TallyColors.cardColor(for: idx))
-                        .clipShape(Circle())
-                }
-
                 Text(CentsFormatter.format(item.totalCents))
                     .font(TallyFont.amounts)
                     .foregroundStyle(TallyColors.textPrimary)
             }
-            .frame(minHeight: TallySpacing.listItemMinHeight)
-            .padding(.vertical, TallySpacing.xs)
-            .background(isSelected ? TallyColors.bgSecondary : Color.clear)
-            .contentShape(Rectangle())
+
+            // Inline member avatars
+            HStack(spacing: TallySpacing.sm) {
+                ForEach(Array(members.enumerated()), id: \.element.memberID) { index, member in
+                    Button {
+                        withAnimation(.spring(response: 0.2)) {
+                            if assignments[item.id] == member.memberID {
+                                assignments.removeValue(forKey: item.id)
+                            } else {
+                                assignments[item.id] = member.memberID
+                            }
+                        }
+                    } label: {
+                        let isAssigned = assignedMemberId == member.memberID
+                        HStack(spacing: TallySpacing.xs) {
+                            Text(String(member.displayName.prefix(1)).uppercased())
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(isAssigned ? .white : TallyColors.textSecondary)
+                                .frame(width: 24, height: 24)
+                                .background(isAssigned ? TallyColors.cardColor(for: index) : TallyColors.bgSecondary)
+                                .clipShape(Circle())
+
+                            Text(member.displayName.components(separatedBy: " ").first ?? member.displayName)
+                                .font(TallyFont.caption)
+                                .foregroundStyle(isAssigned ? TallyColors.textPrimary : TallyColors.textTertiary)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, TallySpacing.sm)
+                        .padding(.vertical, TallySpacing.xs)
+                        .background(isAssigned ? TallyColors.cardColor(for: index).opacity(0.1) : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: TallySpacing.chipCornerRadius))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: TallySpacing.chipCornerRadius)
+                                .stroke(isAssigned ? TallyColors.cardColor(for: index).opacity(0.3) : TallyColors.divider, lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
-        .buttonStyle(.plain)
+        .padding(TallySpacing.cardPadding)
+        .background(TallyColors.bgPrimary)
+        .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius)
+                .stroke(TallyColors.divider, lineWidth: 1)
+        )
+    }
+
+    // MARK: - Member Summary
+
+    private var memberSummary: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(TallyColors.divider)
+                .frame(height: 0.5)
+                .padding(.bottom, TallySpacing.lg)
+
+            ForEach(Array(members.enumerated()), id: \.element.memberID) { index, member in
+                let total = memberTotal(for: member.memberID)
+                HStack(spacing: TallySpacing.md) {
+                    Text(String(member.displayName.prefix(1)).uppercased())
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 24, height: 24)
+                        .background(TallyColors.cardColor(for: index))
+                        .clipShape(Circle())
+
+                    Text(member.displayName)
+                        .font(TallyFont.body)
+                        .foregroundStyle(TallyColors.textPrimary)
+
+                    Spacer()
+
+                    Text(CentsFormatter.format(total))
+                        .font(TallyFont.amounts)
+                        .foregroundStyle(total > 0 ? TallyColors.textPrimary : TallyColors.textTertiary)
+                }
+                .padding(.vertical, TallySpacing.xs)
+            }
+
+            if unassignedTotal > 0 {
+                HStack {
+                    Text("Unassigned")
+                        .font(TallyFont.body)
+                        .foregroundStyle(TallyColors.textSecondary)
+                    Spacer()
+                    Text(CentsFormatter.format(unassignedTotal))
+                        .font(TallyFont.amounts)
+                        .foregroundStyle(TallyColors.statusAlert)
+                }
+                .padding(.vertical, TallySpacing.xs)
+            }
+        }
     }
 }
 
@@ -180,7 +210,11 @@ struct PayLeaderAssignView: View {
         PayLeaderAssignView(viewModel: {
             let vm = PayFlowViewModel()
             vm.receipt = PayReceipt.sample
-            vm.splits = PaySplit.samples
+            vm.serverMembers = [
+                GroupMemberDTO(memberID: "m1", displayName: "Sarah Kim", splitWeight: 1.0, tallyBalanceCents: 0, isLeader: false, hasCard: false, kycStatus: "approved"),
+                GroupMemberDTO(memberID: "m2", displayName: "Alex Chen", splitWeight: 1.0, tallyBalanceCents: 0, isLeader: false, hasCard: false, kycStatus: "approved"),
+                GroupMemberDTO(memberID: "m3", displayName: "You", splitWeight: 1.0, tallyBalanceCents: 0, isLeader: true, hasCard: true, kycStatus: "approved"),
+            ]
             return vm
         }())
     }

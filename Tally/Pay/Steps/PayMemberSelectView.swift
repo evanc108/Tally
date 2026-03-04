@@ -6,8 +6,9 @@ struct PayMemberSelectView: View {
     /// Items the current user has claimed (local state for MVP).
     @State private var claimedItemIds: Set<UUID> = []
 
+    /// Only items with a non-zero price are claimable.
     private var items: [PayReceiptItem] {
-        viewModel.receipt?.items ?? []
+        (viewModel.receipt?.items ?? []).filter { $0.totalCents > 0 }
     }
 
     /// Total cents for items the user has claimed.
