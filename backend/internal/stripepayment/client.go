@@ -1,6 +1,7 @@
 // Package stripepayment wraps the Stripe PaymentIntents and SetupIntents APIs.
-// SetupIntent is used to attach a debit card (PaymentMethod) to a member.
-// PaymentIntent is used at settlement time to charge a member's card.
+// SetupIntent is used to attach a bank account (ACH, PaymentMethod type us_bank_account) to a member.
+// PaymentIntent is used at settlement time to charge a member's bank account via ACH Direct Debit.
+// ACH has a ~1 day holding period; Stripe fronts the merchant charge until funds settle.
 package stripepayment
 
 import (
@@ -17,13 +18,12 @@ import (
 // PaymentClient abstracts Stripe payment operations so handlers can be tested
 // without real Stripe credentials.
 type PaymentClient interface {
-	// CreateSetupIntent creates a Stripe SetupIntent for attaching a debit
-	// card. Returns the client_secret the iOS app uses to complete the flow.
+	// CreateSetupIntent creates a Stripe SetupIntent for attaching a US bank
+	// account (ACH Direct Debit). Returns the client_secret the client uses to complete the flow.
 	CreateSetupIntent(ctx context.Context, customerID string) (clientSecret string, err error)
 
-	// ChargePaymentMethod charges an existing PaymentMethod. The idempotencyKey
-	// is passed as the Stripe idempotency key header to prevent double charges
-	// on retries.
+	// ChargePaymentMethod charges an existing PaymentMethod (us_bank_account) via ACH.
+	// The idempotencyKey is passed as the Stripe idempotency key header to prevent double charges.
 	ChargePaymentMethod(ctx context.Context, pmID string, amountCents int64, currency, idempotencyKey string) (chargeID string, err error)
 
 	// RetrievePaymentMethod verifies that a PaymentMethod exists in Stripe.
@@ -46,9 +46,8 @@ func NewRealClient(secretKey string) PaymentClient {
 
 func (c *realClient) CreateSetupIntent(ctx context.Context, customerID string) (string, error) {
 	params := &stripe.SetupIntentParams{
-		// card + off_session: supports debit/credit cards and allows the PM to
-		// be charged without the cardholder present (required for settlement).
-		PaymentMethodTypes: []*string{stripe.String("card")},
+		// us_bank_account: ACH Direct Debit; lower fees than card. off_session for settlement.
+		PaymentMethodTypes: []*string{stripe.String("us_bank_account")},
 		Usage:              stripe.String("off_session"),
 	}
 	if customerID != "" {
@@ -65,12 +64,12 @@ func (c *realClient) CreateSetupIntent(ctx context.Context, customerID string) (
 
 func (c *realClient) ChargePaymentMethod(ctx context.Context, pmID string, amountCents int64, currency, idempotencyKey string) (string, error) {
 	params := &stripe.PaymentIntentParams{
-		Amount:        stripe.Int64(amountCents),
-		Currency:      stripe.String(currency),
-		PaymentMethod: stripe.String(pmID),
-		Confirm:       stripe.Bool(true),
-		// off_session = card-not-present charge during settlement (no 3DS)
-		OffSession: stripe.Bool(true),
+		Amount:             stripe.Int64(amountCents),
+		Currency:           stripe.String(currency),
+		PaymentMethod:      stripe.String(pmID),
+		PaymentMethodTypes: stripe.StringSlice([]string{"us_bank_account"}),
+		Confirm:            stripe.Bool(true),
+		OffSession:         stripe.Bool(true),
 	}
 	params.Context = ctx
 	params.SetIdempotencyKey(idempotencyKey)

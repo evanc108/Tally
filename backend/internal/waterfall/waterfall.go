@@ -1,15 +1,15 @@
 // Package waterfall implements the simplified Stripe-only funding logic for the
 // JIT authorization handler.
 //
-// Architecture decision: because every member must link a debit card
+// Architecture decision: because every member must link a bank account (ACH)
 // (stripe_payment_method_id) before joining a group, the JIT handler can
 // always approve — there is no need to check balances at authorization time.
-// Actual card charging happens in the settlement worker after the merchant
+// Actual ACH pulls happen in the settlement worker after the merchant
 // charge has already been fronted by Stripe Issuing.
 //
 // The "balance waterfall" (Plaid checks, tier 2/3) has been removed. All
 // members receive a direct_pull funding plan at JIT time, and the settlement
-// worker handles retries + leader cover when charges fail.
+// worker handles retries + leader cover when ACH charges fail.
 package waterfall
 
 import (
@@ -100,8 +100,8 @@ func ResolveCard(ctx context.Context, db *sql.DB, cardToken string) (
 }
 
 // BuildFundingPlan assigns direct_pull to every member. Because a linked
-// stripe_payment_method_id is required before joining a group, every member
-// is guaranteed to have a card on file. If any member is missing a PM
+// stripe_payment_method_id (bank account) is required before joining a group, every member
+// is guaranteed to have a payment method on file. If any member is missing a PM
 // (data integrity error), the transaction is declined.
 //
 // Leader cover and retry logic are handled by the settlement worker, not here.

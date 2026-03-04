@@ -1,4 +1,4 @@
-// Package stripepayment handles Stripe SetupIntent and PaymentMethod attachment for debit card linking.
+// Package stripepayment handles Stripe SetupIntent and PaymentMethod attachment for ACH bank account linking.
 package stripepayment
 
 import (
@@ -40,12 +40,12 @@ type CreateSetupIntentRequest struct {
 	MemberID string `json:"member_id" binding:"required"`
 }
 
-// CreateSetupIntentResponse returns the client_secret for the client to confirm and attach a card.
+// CreateSetupIntentResponse returns the client_secret for the client to confirm and attach a bank account.
 type CreateSetupIntentResponse struct {
 	ClientSecret string `json:"client_secret"`
 }
 
-// CreateSetupIntent creates a Stripe Customer (if needed) and a SetupIntent so the client can attach a PaymentMethod.
+// CreateSetupIntent creates a Stripe Customer (if needed) and a SetupIntent for ACH (us_bank_account) so the client can attach a bank account.
 func (h *Handler) CreateSetupIntent(c *gin.Context) {
 	if h.cfg.StripeSecretKey == "" {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "stripe not configured"})
@@ -96,9 +96,9 @@ func (h *Handler) CreateSetupIntent(c *gin.Context) {
 	}
 
 	si, err := setupintent.New(&stripe.SetupIntentParams{
-		Customer: stripe.String(custID),
-		PaymentMethodTypes: stripe.StringSlice([]string{"card"}),
-		Usage: stripe.String("off_session"),
+		Customer:           stripe.String(custID),
+		PaymentMethodTypes: stripe.StringSlice([]string{"us_bank_account"}),
+		Usage:              stripe.String("off_session"),
 	})
 	if err != nil {
 		slog.ErrorContext(c.Request.Context(), "Stripe SetupIntent create failed", "error", err)
@@ -115,7 +115,7 @@ type AttachPaymentMethodRequest struct {
 	AsBackup       bool   `json:"as_backup"` // if true, set as backup; else primary
 }
 
-// AttachPaymentMethod attaches the given PaymentMethod to the member's Stripe Customer and saves to DB.
+// AttachPaymentMethod attaches the given PaymentMethod (bank account) to the member's Stripe Customer and saves to DB.
 func (h *Handler) AttachPaymentMethod(c *gin.Context) {
 	if h.cfg.StripeSecretKey == "" {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "stripe not configured"})

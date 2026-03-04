@@ -164,7 +164,12 @@ func (h *Handler) IssueCard(c *gin.Context) {
 		res, upErr := h.db.ExecContext(ctx, updateMembers, cardholderID, cardID, cardToken, memberID, userID)
 		if upErr != nil {
 			slog.ErrorContext(ctx, "card persist failed", "member_id", memberID, "error", err, "fallback_error", upErr)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+			body := gin.H{"error": "db write failed"}
+			if h.cfg.Environment != "production" {
+				body["insert_error"] = err.Error()
+				body["fallback_error"] = upErr.Error()
+			}
+			c.JSON(http.StatusInternalServerError, body)
 			return
 		}
 		if n, _ := res.RowsAffected(); n == 0 {

@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
+
+	"github.com/google/uuid"
 )
 
-// MockClient returns deterministic fake IDs — suitable for local development
-// and unit tests without real Stripe credentials.
+// MockClient returns unique fake IDs — suitable for local development
+// and unit tests without real Stripe credentials. Card IDs include a UUID
+// so they stay unique across process restarts and avoid members_card_token_key
+// duplicate errors when re-issuing or running tests multiple times.
 type MockClient struct {
 	counter atomic.Int64
 }
@@ -23,8 +27,7 @@ func (m *MockClient) CreateCardholder(_ context.Context, req CreateCardholderReq
 }
 
 func (m *MockClient) IssueCard(_ context.Context, cardholderID, _ string) (string, string, error) {
-	n := m.counter.Add(1)
-	cardID := fmt.Sprintf("ic_mock_%d", n)
+	cardID := fmt.Sprintf("ic_mock_%s", uuid.New().String()[:8])
 	return cardID, cardID, nil
 }
 
