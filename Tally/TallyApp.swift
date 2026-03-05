@@ -50,13 +50,27 @@ struct RootView: View {
                         removal: .move(edge: .trailing)
                     ))
                     .zIndex(2)
+            case .verifyingEmail:
+                EmailVerificationView()
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing),
+                        removal: .move(edge: .leading)
+                    ))
+                    .zIndex(3)
+            case .verifyingIdentity:
+                IdentityVerificationFlowView()
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing),
+                        removal: .move(edge: .leading)
+                    ))
+                    .zIndex(4)
             case .authenticated:
                 ContentView()
                     .transition(.asymmetric(
                         insertion: .move(edge: .bottom).combined(with: .opacity),
                         removal: .move(edge: .bottom).combined(with: .opacity)
                     ))
-                    .zIndex(3)
+                    .zIndex(5)
             }
         }
         .animation(.easeInOut(duration: 0.35), value: authManager.state)
@@ -66,8 +80,17 @@ struct RootView: View {
             }
         }
         .onChange(of: clerk.session) {
-            if clerk.session != nil, authManager.state != .authenticated {
-                authManager.completeAuth()
+            if clerk.session != nil {
+                // Session created — if we're in email verification or auth, move forward
+                switch authManager.state {
+                case .verifyingEmail:
+                    authManager.requireIdentityVerification()
+                case .authenticating:
+                    // Returning user (OAuth or password login) — go straight to app
+                    authManager.completeAuth()
+                default:
+                    break
+                }
             } else if clerk.session == nil, authManager.state == .authenticated {
                 authManager.signOut()
             }

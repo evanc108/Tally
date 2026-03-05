@@ -2,7 +2,7 @@
 
 ## Overview
 
-Tally's backend is a Go service that powers real-time group spending using a **Proxy Card Architecture**. Rather than sharing a single card, each group member receives their own unique virtual card token — all mapped to the same group. When any member taps their token at a merchant, the backend authorizes the charge in milliseconds by confirming that every member has a linked debit card, then charges each member's card asynchronously at settlement.
+Tally's backend is a Go service that powers real-time group spending using a **Proxy Card Architecture**. Rather than sharing a single card, each group member receives their own unique virtual card token — all mapped to the same group. When any member taps their token at a merchant, the backend authorizes the charge in milliseconds by confirming that every member has a linked bank account (ACH), then charges each member's bank account asynchronously at settlement via ACH Direct Debit.
 
 ---
 
@@ -15,8 +15,8 @@ Tally's backend is a Go service that powers real-time group spending using a **P
 | Database | PostgreSQL 16 | Double-entry ledger requires ACID guarantees + serializable transactions |
 | Cache / Lock | Redis 7 | Sub-millisecond idempotency checks and distributed locking |
 | Card Issuing | Stripe Issuing | Virtual card issuance; Apple/Google Wallet provisioning; JIT authorization webhooks |
-| Debit Charging | Stripe PaymentIntents | Settlement charges against linked debit cards |
-| Bank Linking | Stripe Financial Connections | Debit card attachment via SetupIntent |
+| ACH Charging | Stripe PaymentIntents | Settlement charges against linked bank accounts (ACH Direct Debit) |
+| Bank Linking | Stripe SetupIntent (us_bank_account) | Bank account attachment for ACH |
 | Identity / KYC | Stripe Identity | Document verification before card issuance |
 | Auth | Clerk | RS256 JWT verification via JWKS |
 | Schema Migrations | golang-migrate | SQL files embedded in the binary; runs automatically on boot |
@@ -46,11 +46,15 @@ backend/
     │       ├── 000001_init.up.sql       Full base schema
     │       ├── 000007_stripe_migration  Drops Plaid/Highnote columns, adds Stripe columns
     │       ├── 000008_kyc_status        Adds kyc_status to members
+    │       ├── 000012_cards             cards table with lifecycle status + backward-compat trigger
+    │       ├── 000013_receipts          receipts, receipt_items, receipt_item_assignments tables
     │       └── ...
     ├── groups/
     │   └── handler.go                   Group, member, transaction, IOU, leader auth endpoints
     ├── ledger/
     │   └── posting.go                   Double-entry accounting engine (bulk inserts)
+    ├── receipts/
+    │   └── session_handler.go           Receipt session CRUD — create/assign/finalize/cancel
     ├── middleware/
     │   ├── clerk.go                     Clerk JWT verification (RS256 via JWKS)
     │   ├── devauth.go                   Dev bypass — injects DEV_USER_ID when CLERK_JWKS_URL unset
@@ -79,7 +83,7 @@ backend/
 
 ## Database Schema
 
-Eight tables form the complete data model. All monetary values are stored as **integer cents** (never floats) to avoid rounding errors.
+Eleven tables form the complete data model. All monetary values are stored as **integer cents** (never floats) to avoid rounding errors.
 
 ### `users`
 One row per Tally user account, keyed by Clerk user ID.
@@ -114,8 +118,8 @@ One row per user per group. A user in three groups has three rows.
 | card_token | TEXT | Unique. The member's virtual card token (Stripe Issuing) |
 | stripe_cardholder_id | TEXT | Stripe Issuing cardholder ID |
 | stripe_card_id | TEXT | Stripe Issuing card ID |
-| stripe_payment_method_id | TEXT | Primary linked debit card. Used for settlement |
-| stripe_backup_payment_method_id | TEXT | Fallback debit card if primary fails |
+| stripe_payment_method_id | TEXT | Primary linked bank account (ACH). Used for settlement |
+| stripe_backup_payment_method_id | TEXT | Fallback bank account if primary fails |
 | kyc_status | TEXT | `pending` / `approved` / `rejected`. Card issuance requires `approved` |
 | tally_balance_cents | BIGINT | Reserved; not currently used |
 | split_weight | NUMERIC(7,6) | Fractional share (e.g. `0.250000` for a 4-way equal split). Sum across group must = 1.0 |
@@ -123,7 +127,7 @@ One row per user per group. A user in three groups has three rows.
 | leader_pre_authorized | BOOL | Leader has opted in to cover member card failures for the current outing |
 | leader_pre_authorized_at | TIMESTAMPTZ | When pre-authorization was set. Expires after 24 hours |
 
-Linking a debit card (`stripe_payment_method_id`) is required before a user can join a group. This invariant allows the JIT handler to always approve without checking balances.
+Linking a bank account (`stripe_payment_method_id`, ACH) is required before a user can join a group. This invariant allows the JIT handler to always approve without checking balances.
 
 ### `accounts`
 Ledger accounts. Each **member** gets one `asset` account. Each **group** gets one `liability` (clearing) account.
@@ -142,7 +146,7 @@ One row per card swipe. Tracks the lifecycle from authorization to settlement.
 | `PENDING` | Created when the swipe arrives |
 | `APPROVED` | Ledger entries written; Stripe told to approve |
 | `DECLINED` | Could not be authorized |
-| `SETTLED` | All members' debit cards have been charged |
+| `SETTLED` | All members' bank accounts have been charged (ACH) |
 | `REVERSED` | Transaction was unwound (e.g. merchant refund) |
 
 The `idempotency_key` column has a `UNIQUE` constraint as a backstop against duplicate processing if Redis is bypassed.
@@ -164,7 +168,7 @@ Records how each member's share will be (or was) collected. One row per member p
 
 | funding_type | Meaning |
 |---|---|
-| `direct_pull` | Charged to the member's linked debit card via Stripe at settlement |
+| `direct_pull` | Charged to the member's linked bank account via Stripe ACH at settlement |
 | `leader_overwrite` | Member's cards failed; leader's card covered the share. An IOU is recorded |
 | `tally_balance` | Reserved; not used in current flow |
 
@@ -179,6 +183,46 @@ Records shortfalls covered by the group leader. Created by the settlement worker
 | transaction_id | UUID | The transaction that triggered the IOU |
 | amount_cents | BIGINT | Amount covered |
 | status | TEXT | `OUTSTANDING` → `SETTLED` |
+
+### `receipts`
+One row per receipt session. Created before a card swipe to enable itemized splitting.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID | Primary key |
+| group_id | UUID | FK → tally_groups |
+| created_by_user_id | TEXT | Clerk user ID of the member who scanned the receipt |
+| merchant_name | TEXT | From the parsed receipt |
+| total_cents | BIGINT | Total bill amount in cents |
+| status | TEXT | `draft` → `finalized` → `deleted` |
+| transaction_id | UUID | Set atomically by JIT when this receipt is consumed. NULL until then |
+| updated_at | TIMESTAMPTZ | Used to compute the 2-hour finalization expiry window |
+
+A receipt is consumable only once: the JIT handler sets `transaction_id` with `WHERE transaction_id IS NULL`, so concurrent JIT requests cannot both claim the same receipt.
+
+### `receipt_items`
+One row per line item on a receipt.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID | Primary key |
+| receipt_id | UUID | FK → receipts |
+| name | TEXT | Item description |
+| quantity | INT | Number of units |
+| unit_price_cents | BIGINT | Per-unit price |
+| total_cents | BIGINT | `quantity × unit_price_cents` |
+
+### `receipt_item_assignments`
+Records which member claimed which item and how much they owe for it.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID | Primary key |
+| receipt_item_id | UUID | FK → receipt_items |
+| member_id | UUID | FK → members |
+| amount_cents | BIGINT | Member's share of this item (validated server-side) |
+
+A UNIQUE constraint on `(receipt_item_id, member_id)` prevents duplicate claims. Server validation enforces that `amount_cents` falls within the mathematically correct floor/ceil range for each item.
 
 ---
 
@@ -234,19 +278,22 @@ All three use **SERIALIZABLE isolation** to prevent phantom reads when multiple 
 The JIT handler makes **zero external API calls**. All data is in Postgres.
 
 ```
-Step                          How                  Typical latency
-─────────────────────────────────────────────────────────────────
-1. resolveCard()              Postgres read         ~5–15ms
-2. insertPendingTransaction() Postgres write        ~5–10ms
-3. buildFundingPlan()         In-memory             <1ms
-4. PostPendingTransaction()   Postgres write        ~5–10ms
-─────────────────────────────────────────────────────────────────
-Total JIT handler time                             ~20–50ms
+Step                           How                  Typical latency
+──────────────────────────────────────────────────────────────────
+1. resolveCard()               Postgres read         ~5–15ms
+2. insertPendingTransaction()  Postgres write        ~5–10ms
+3. ResolveReceiptSplit()       Postgres read         ~5–10ms  (optional)
+4. buildFundingPlan()          In-memory             <1ms
+5. PostPendingTransaction()    Postgres write        ~5–10ms
+6. linkReceiptToTransaction()  Postgres write        ~3–5ms   (optional)
+──────────────────────────────────────────────────────────────────
+Total JIT handler time (no receipt)                ~20–40ms
+Total JIT handler time (with receipt)              ~30–50ms
 Stripe's response deadline                         ~2,000ms
 Safety margin                                      ~40×
 ```
 
-This is possible because members must link a debit card before joining a group. By swipe time, every member is guaranteed to have a `stripe_payment_method_id`. No balance checks, no external calls needed.
+This is possible because members must link a bank account (ACH) before joining a group. By swipe time, every member is guaranteed to have a `stripe_payment_method_id`. No balance checks, no external calls needed.
 
 ```
 Stripe Issuing
@@ -272,17 +319,28 @@ Stripe Issuing
 │  2. insertPendingTransaction()                                 │
 │     Writes PENDING transaction row immediately                 │
 │                                                                │
-│  3. BuildFundingPlan()                                         │
-│     Every member → direct_pull                                 │
-│     Compute each member's share from split_weight              │
-│     Error if any member is missing stripe_payment_method_id   │
+│  3. ResolveReceiptSplit()       [if receipt session active]   │
+│     Finds finalized receipt for this group with no txn linked │
+│     Validates updated_at within 2-hour window                 │
+│     Returns map[memberID]amountCents from assignments          │
 │                                                                │
-│  4. PostPendingTransaction()                                   │
+│  4. BuildFundingPlan()  (receipt-based or split_weight)       │
+│     With receipt: use item assignment amounts per member       │
+│     Without: compute each member's share from split_weight    │
+│     Fallback: if receipt produced 0 splits → use split_weight  │
+│     Hard decline: if still 0 splits → DECLINE no_funding_plan │
+│                                                                │
+│  5. PostPendingTransaction()                                   │
 │     Serializable Postgres transaction writes atomically:       │
 │       • N journal_entries  (one per member, PENDING)           │
 │       • N funding_pulls    (one per member, direct_pull)       │
 │                                                                │
-│  5. Respond to Stripe (~20–50ms after request arrived)        │
+│  6. LinkReceiptToTransaction()  [if receipt was used]         │
+│     UPDATE receipts SET transaction_id = $1                   │
+│     WHERE id = $2 AND transaction_id IS NULL                   │
+│     (atomic — concurrent JIT requests cannot both claim it)   │
+│                                                                │
+│  7. Respond to Stripe (~30–50ms after request arrived)        │
 └────────────────────────────────────────────────────────────────┘
      │
      ▼
@@ -291,9 +349,49 @@ Stripe Issuing
 
 ---
 
+## Receipt Sessions (Itemized Splitting)
+
+Receipt sessions allow members to claim specific items on a bill before swiping, so each person is charged only for what they ordered. The flow is entirely pre-swipe; by the time the card is tapped, JIT just reads pre-computed amounts.
+
+### Session Lifecycle
+
+```
+POST /v1/groups/:id/receipts          → status: draft
+PUT  /v1/groups/:id/receipts/:id/assignments  (each member, one or more times)
+POST /v1/groups/:id/receipts/:id/finalize     → status: finalized  (leader only)
+                                        ↓
+                             card swipe triggers JIT
+                                        ↓
+                     receipts.transaction_id = <txn_id>   (consumed)
+```
+
+Cancellation is available at any point before finalization (`DELETE /v1/groups/:id/receipts/:id`).
+
+### Security Properties
+
+| Property | Implementation |
+|---|---|
+| IDOR prevention | All queries scope receipt to `group_id`; members can only access their own group's receipts |
+| Finalize authorization | Leader-only (checked via `IsLeaderKey` in gin context) |
+| Cancel authorization | Creator or leader only |
+| Amount validation | Server recomputes floor/ceil from `receipt_items.total_cents`; client-supplied `amount_cents` is rejected if outside that range |
+| Concurrent sessions | `CreateReceipt` auto-cancels any existing unlinked draft for the group inside the same DB transaction |
+| Single-use enforcement | `UPDATE receipts SET transaction_id = $1 WHERE id = $2 AND transaction_id IS NULL`; only one JIT request can claim a receipt |
+| Expiry | Receipt must have `updated_at > NOW() - INTERVAL '2 hours'` at JIT time (starts from finalization, not creation) |
+
+### Fallback Behavior
+
+| Scenario | JIT Result |
+|---|---|
+| No finalized receipt exists for the group | Use `split_weight` allocation (normal flow) |
+| Finalized receipt exists but all assignments sum to 0 | Fall back to `split_weight` |
+| Fallback also produces 0 splits | DECLINE with `no_funding_plan` |
+
+---
+
 ## Settlement
 
-Settlement is decoupled from authorization. Stripe has already fronted the merchant charge; settlement recoups that from each member's debit card.
+Settlement is decoupled from authorization. Stripe has already fronted the merchant charge; settlement recoups that from each member's bank account via ACH (typically ~1 day holding period).
 
 ```
 For each APPROVED transaction:

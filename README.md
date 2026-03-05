@@ -10,7 +10,7 @@ Tally is a fintech platform that eliminates the social and financial friction of
 
 Every group payment tool today has the same flaw: **one person gets stuck covering the bill**. They front $300 for dinner, then spend the next week sending passive-aggressive reminders to friends. The debt lingers. The friendship strains.
 
-Tally solves this at the infrastructure level. When a Tally card is swiped, the system identifies the group and authorizes the transaction in under two seconds — then charges every member's linked debit card automatically.
+Tally solves this at the infrastructure level. When a Tally card is swiped, the system identifies the group and authorizes the transaction in under two seconds — then charges every member's linked bank account via ACH automatically.
 
 ---
 
@@ -43,7 +43,7 @@ Stripe sends issuing_authorization.created webhook
 Backend resolves card token → group + all members
         │
         ▼
-Verify every member has a linked debit card
+Verify every member has a linked bank account (ACH)
         │
         ▼
 Write PENDING ledger entries for all members
@@ -52,22 +52,22 @@ Write PENDING ledger entries for all members
 APPROVE — Stripe fronts the merchant charge
         │
         ▼
-Settlement worker charges each member's debit card
+Settlement worker charges each member's bank account via ACH
 ```
 
 Total JIT latency: **~20–50ms** (Postgres reads only, no external API calls). Stripe's deadline is 2 seconds — Tally responds with a 40× safety margin.
 
 ### 3. Funding Model
 
-Every member must link a debit card (Stripe PaymentMethod) before joining a group. This single invariant makes the JIT handler simple: because every member has a card on file, the transaction is always approved at swipe time. The actual debit happens at settlement.
+Every member must link a bank account (ACH via Stripe) before joining a group. This single invariant makes the JIT handler simple: because every member has a payment method on file, the transaction is always approved at swipe time. The actual ACH pull happens at settlement (~1 day holding period).
 
 | Stage | What Happens |
 |-------|-------------|
 | **Card swipe** | Stripe fronts the merchant charge from Stripe's own funds |
-| **Settlement** | Settlement worker charges each member's linked debit card via Stripe PaymentIntent |
-| **Card failure** | Retry → backup card → leader cover → flag for review |
+| **Settlement** | Settlement worker charges each member's linked bank account via Stripe ACH Direct Debit |
+| **ACH failure** | Retry → backup bank account → leader cover → flag for review |
 
-There is no wallet preloading or ACH balance check. Funding is debit-only.
+There is no wallet preloading. Funding is ACH-only (lower fees than card).
 
 ### 4. Leader Cover Fail-Safe
 
@@ -79,7 +79,7 @@ To prevent embarrassing declines when a member's card fails at settlement:
 - An **IOU** is recorded in the ledger: the member owes the leader
 - The IOU is tracked in-app and can be marked settled when repaid out-of-band
 
-The card never declines because of one member's card failure — leader cover ensures the group always completes the purchase.
+The card never declines because of one member's ACH failure — leader cover ensures the group always completes the purchase.
 
 ### 5. The Double-Entry Ledger
 
@@ -108,7 +108,7 @@ Reversals (merchant refunds) create new offsetting entries — original records 
 ### Setting Up a Spending Circle
 
 1. **Create a Circle** — Give it a name ("Ski Trip 2026", "Shared Apartment") and currency
-2. **Link a Debit Card** — Each member links their bank debit card via Stripe
+2. **Link a Bank Account** — Each member links their bank account via Stripe (ACH)
 3. **Complete KYC** — Each member verifies their identity via Stripe Identity
 4. **Configure Splits** — Choose equal, percentage-based, or weighted splits
 5. **Designate a Leader** — The person who serves as the fail-safe backstop
@@ -121,8 +121,21 @@ Reversals (merchant refunds) create new offsetting entries — original records 
 3. Tally resolves the card token to the group and loads all members
 4. Tally writes PENDING ledger entries and responds APPROVE (~20ms)
 5. Stripe pays the merchant from Stripe's funds
-6. Settlement worker immediately charges each member's debit card
+6. Settlement worker immediately charges each member's bank account via ACH
 7. All members see the transaction in-app with their individual share
+
+### Itemized Splitting (Receipt Sessions)
+
+When the group receives a bill before paying — e.g. a restaurant check — members can claim individual items so each person pays only what they ordered:
+
+1. **Scan the receipt** — any member scans/uploads the bill; the backend parses it into line items
+2. **Start a session** — `POST /v1/groups/:id/receipts` saves the parsed receipt as a draft in the database
+3. **Claim items** — each member calls `PUT /v1/groups/:id/receipts/:receiptId/assignments` to indicate which items (and what share of each) they want to pay
+4. **Leader finalizes** — `POST /v1/groups/:id/receipts/:receiptId/finalize` locks in the assignments (leader-only)
+5. **Swipe the card** — when the card is tapped at the merchant, the JIT handler detects the finalized receipt and uses the item-based amounts instead of the default split weights
+6. **Receipt consumed** — the receipt is atomically linked to the transaction so it can only be used once
+
+If no finalized receipt is found at swipe time (or assignments cover nothing), JIT falls back to the standard `split_weight` allocation. If a receipt exists but produces zero splits, the transaction is declined.
 
 ### When a Member's Card Fails at Settlement
 
@@ -166,8 +179,8 @@ Tally/
 | Database | PostgreSQL 16 | ACID + serializable transactions for ledger integrity |
 | Cache / Lock | Redis 7 | Sub-millisecond idempotency checks and distributed locking |
 | Card Issuing | Stripe Issuing | Virtual card issuance; Apple/Google Wallet provisioning; JIT webhooks |
-| Debit Charging | Stripe PaymentIntents | Settlement charges against linked debit cards |
-| Bank Linking | Stripe Financial Connections | Debit card attachment via SetupIntent flow |
+| ACH Charging | Stripe PaymentIntents | Settlement charges against linked bank accounts (ACH Direct Debit) |
+| Bank Linking | Stripe SetupIntent (us_bank_account) | Bank account attachment for ACH |
 | Identity / KYC | Stripe Identity | Document verification before card issuance |
 | Auth | Clerk | RS256 JWT for user-facing routes |
 | Migrations | golang-migrate | SQL embedded in binary; auto-runs on boot |
@@ -177,7 +190,7 @@ Tally/
 
 **JIT is Postgres-only.** The authorization handler makes zero external API calls. All data needed to approve or decline is stored in Postgres. This is how the 2-second Stripe window is met with a 40× margin.
 
-**Debit required before joining.** Every member must link a debit card (`stripe_payment_method_id`) before they can be added to a group. This invariant means JIT can always approve — there are no missing cards to discover at swipe time.
+**Bank account (ACH) required before joining.** Every member must link a bank account (`stripe_payment_method_id`) before they can be added to a group. This invariant means JIT can always approve — there are no missing payment methods to discover at swipe time.
 
 **Leader cover lives at settlement, not JIT.** Since all members have cards, JIT always approves. Leader cover fires in the settlement worker when a member's card actually declines — exactly where the failure occurs.
 
@@ -236,10 +249,10 @@ Swagger UI (interactive docs) is at `http://localhost:8080/swagger/index.html`.
 | `GET` | `/healthz` | Health check |
 | `POST` | `/v1/users/me` | Create or update the authenticated user |
 | `POST` | `/v1/users/me/kyc` | Start a Stripe Identity KYC session |
-| `POST` | `/v1/users/me/payment-method` | Create a SetupIntent to link a primary debit card |
-| `POST` | `/v1/users/me/payment-method/confirm` | Save the linked primary debit card |
-| `POST` | `/v1/users/me/payment-method/backup` | Create a SetupIntent to link a backup debit card |
-| `POST` | `/v1/users/me/payment-method/backup/confirm` | Save the linked backup debit card |
+| `POST` | `/v1/users/me/payment-method` | Create a SetupIntent to link a primary bank account (ACH) |
+| `POST` | `/v1/users/me/payment-method/confirm` | Save the linked primary bank account |
+| `POST` | `/v1/users/me/payment-method/backup` | Create a SetupIntent to link a backup bank account |
+| `POST` | `/v1/users/me/payment-method/backup/confirm` | Save the linked backup bank account |
 | `POST` | `/v1/groups` | Create a spending group |
 | `GET` | `/v1/groups` | List groups the authenticated user belongs to |
 | `GET` | `/v1/groups/:id` | Get group details and members |
@@ -251,6 +264,11 @@ Swagger UI (interactive docs) is at `http://localhost:8080/swagger/index.html`.
 | `POST` | `/v1/groups/:id/leader/authorize` | Leader pre-authorizes cover for the next 24 hours |
 | `DELETE` | `/v1/groups/:id/leader/authorize` | Leader revokes pre-authorization |
 | `GET` | `/v1/groups/:id/leader/authorize` | Get leader pre-authorization status |
+| `POST` | `/v1/groups/:id/receipts` | Start a receipt session for itemized splitting |
+| `GET` | `/v1/groups/:id/receipts/active` | Get the active receipt with all member assignments |
+| `PUT` | `/v1/groups/:id/receipts/:receiptId/assignments` | Member claims their items on the receipt |
+| `POST` | `/v1/groups/:id/receipts/:receiptId/finalize` | Leader locks in assignments (enables item-based JIT) |
+| `DELETE` | `/v1/groups/:id/receipts/:receiptId` | Cancel a draft receipt session |
 | `POST` | `/v1/cards/issue` | Issue a virtual card to a member (KYC required) |
 | `POST` | `/v1/auth/jit` | JIT authorization endpoint (called by card processor) |
 | `POST` | `/v1/webhooks/stripe/issuing-authorization` | Stripe Issuing authorization webhook |
