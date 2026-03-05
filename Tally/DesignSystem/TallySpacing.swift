@@ -31,6 +31,10 @@ enum TallySpacing {
     static let buttonHeight:          CGFloat = 52  // default (primary)
     static let inputHeight:           CGFloat = 52
     static let listItemMinHeight:     CGFloat = 60
+
+    // ── Action grid ──────────────────────────────────────────────────────────
+    static let actionIconSize:    CGFloat = 28
+    static let actionButtonSize:  CGFloat = 56
 }
 
 // MARK: - Corner Radii

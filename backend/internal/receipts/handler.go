@@ -1,7 +1,9 @@
 package receipts
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -26,14 +28,14 @@ type responseMeta struct {
 
 // Handler handles receipt parsing routes.
 type Handler struct {
-	parser      ParserConfig
+	gemini      *GeminiClient
 	maxInputLen int
 }
 
-// NewHandler returns a Handler configured with default parsing rules.
-func NewHandler() *Handler {
+// NewHandler returns a Handler that uses Gemini for parsing.
+func NewHandler(geminiAPIKey, geminiModel string) *Handler {
 	return &Handler{
-		parser:      DefaultConfig(),
+		gemini:      NewGeminiClient(geminiAPIKey, geminiModel),
 		maxInputLen: 10000,
 	}
 }
@@ -50,6 +52,7 @@ func NewHandler() *Handler {
 // @Failure      400  {object} map[string]string
 // @Failure      401  {object} map[string]string
 // @Failure      429  {object} map[string]string
+// @Failure      503  {object} map[string]string
 // @Router       /v1/receipts/parse [post]
 func (h *Handler) ParseReceipt(c *gin.Context) {
 	var req parseRequest
@@ -72,7 +75,35 @@ func (h *Handler) ParseReceipt(c *gin.Context) {
 		}
 	}
 
-	result := h.parser.Parse(req.RawText)
+	if !h.gemini.Available() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "receipt parsing service not configured"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	slog.InfoContext(ctx, "receipt parse request", "raw_text_len", len(req.RawText))
+
+	result, err := h.gemini.ParseReceipt(ctx, req.RawText)
+	if err != nil {
+		slog.ErrorContext(ctx, "gemini parse failed", "error", err)
+		if errors.Is(err, ErrRateLimited) {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "receipt parsing rate limited, please try again shortly"})
+			return
+		}
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "receipt parsing failed, please try again"})
+		return
+	}
+
+	slog.InfoContext(ctx, "receipt parse result",
+		"items", len(result.Items),
+		"subtotal", result.SubtotalCents,
+		"tax", result.TaxCents,
+		"tip", result.TipCents,
+		"total", result.TotalCents,
+		"receipt_date", result.ReceiptDate,
+		"merchant", result.MerchantName,
+		"confidence", result.Confidence,
+	)
 
 	c.JSON(http.StatusOK, parseResponse{
 		Data: result,

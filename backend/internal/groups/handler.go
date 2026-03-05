@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -23,10 +24,16 @@ func NewHandler(db *sql.DB) *Handler {
 
 // ── POST /v1/groups ───────────────────────────────────────────────────────────
 
+type createGroupMember struct {
+	DisplayName string  `json:"display_name" binding:"required"`
+	SplitWeight float64 `json:"split_weight"`
+}
+
 type createGroupRequest struct {
-	Name        string `json:"name"         binding:"required"`
-	Currency    string `json:"currency"`
-	DisplayName string `json:"display_name" binding:"required"`
+	Name        string             `json:"name"         binding:"required"`
+	Currency    string             `json:"currency"`
+	DisplayName string             `json:"display_name" binding:"required"`
+	Members     []createGroupMember `json:"members"` // optional additional members
 }
 
 type createGroupResponse struct {
@@ -103,11 +110,45 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 		return
 	}
 
+	// Look up the creator's real name from the users table.
+	var firstName, lastName string
+	_ = tx.QueryRowContext(c.Request.Context(),
+		`SELECT first_name, last_name FROM users WHERE id = $1`, userID,
+	).Scan(&firstName, &lastName)
+	creatorName := strings.TrimSpace(firstName + " " + lastName)
+	if creatorName == "" {
+		creatorName = req.DisplayName // fallback to group name if user has no name
+	}
+
+	// Determine the creator's split weight based on whether additional members are provided.
+	totalMembers := 1 + len(req.Members) // creator + additional members
+	creatorWeight := 1.0
+	if len(req.Members) > 0 {
+		// Check if members have explicit weights; if not, distribute equally.
+		hasExplicitWeights := false
+		for _, m := range req.Members {
+			if m.SplitWeight > 0 {
+				hasExplicitWeights = true
+				break
+			}
+		}
+		if hasExplicitWeights {
+			// Sum member weights and give the remainder to the creator.
+			var memberWeightSum float64
+			for _, m := range req.Members {
+				memberWeightSum += m.SplitWeight
+			}
+			creatorWeight = math.Max(1.0-memberWeightSum, 0)
+		} else {
+			creatorWeight = 1.0 / float64(totalMembers)
+		}
+	}
+
 	// Add the creator as the first member and leader.
 	if _, err := tx.ExecContext(c.Request.Context(), `
 		INSERT INTO members (id, group_id, user_id, display_name, split_weight, is_leader)
-		VALUES ($1, $2, $3, $4, 1.0, true)`,
-		memberID, groupID, userID, req.DisplayName,
+		VALUES ($1, $2, $3, $4, $5, true)`,
+		memberID, groupID, userID, creatorName, creatorWeight,
 	); err != nil {
 		slog.ErrorContext(c.Request.Context(), "create creator member failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
@@ -123,12 +164,53 @@ func (h *Handler) CreateGroup(c *gin.Context) {
 		return
 	}
 
+	// Add additional members (if provided).
+	for i, m := range req.Members {
+		extraMemberID := uuid.New()
+		extraAccountID := uuid.New()
+		// Generate a placeholder user ID for non-registered members.
+		placeholderUserID := "placeholder-" + extraMemberID.String()
+
+		// Ensure a user row exists for the placeholder.
+		if _, err := tx.ExecContext(c.Request.Context(),
+			`INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, placeholderUserID,
+		); err != nil {
+			slog.ErrorContext(c.Request.Context(), "create placeholder user failed", "index", i, "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+			return
+		}
+
+		weight := m.SplitWeight
+		if weight <= 0 {
+			weight = 1.0 / float64(totalMembers)
+		}
+
+		if _, err := tx.ExecContext(c.Request.Context(), `
+			INSERT INTO members (id, group_id, user_id, display_name, split_weight, is_leader)
+			VALUES ($1, $2, $3, $4, $5, false)`,
+			extraMemberID, groupID, placeholderUserID, m.DisplayName, weight,
+		); err != nil {
+			slog.ErrorContext(c.Request.Context(), "create member failed", "index", i, "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+			return
+		}
+
+		if _, err := tx.ExecContext(c.Request.Context(),
+			`INSERT INTO accounts (id, owner_id, owner_type, account_type) VALUES ($1, $2, 'member', 'asset')`,
+			extraAccountID, extraMemberID,
+		); err != nil {
+			slog.ErrorContext(c.Request.Context(), "create member account failed", "index", i, "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+			return
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "commit failed"})
 		return
 	}
 
-	slog.InfoContext(c.Request.Context(), "group created", "group_id", groupID, "creator_member_id", memberID)
+	slog.InfoContext(c.Request.Context(), "group created", "group_id", groupID, "creator_member_id", memberID, "total_members", totalMembers)
 	c.JSON(http.StatusCreated, createGroupResponse{
 		GroupID:   groupID.String(),
 		Name:      req.Name,
@@ -279,10 +361,14 @@ func (h *Handler) AddMember(c *gin.Context) {
 // ── GET /v1/groups ────────────────────────────────────────────────────────────
 
 type groupSummary struct {
-	GroupID   string `json:"group_id"`
-	Name      string `json:"name"`
-	Currency  string `json:"currency"`
-	CreatedAt string `json:"created_at"`
+	GroupID        string  `json:"group_id"`
+	Name           string  `json:"name"`
+	DisplayName    string  `json:"display_name,omitempty"`
+	Currency       string  `json:"currency"`
+	MemberCount    int     `json:"member_count"`
+	MyCardLastFour *string `json:"my_card_last_four,omitempty"`
+	MyCardType     *string `json:"my_card_type,omitempty"`
+	CreatedAt      string  `json:"created_at"`
 }
 
 // ListGroups returns all groups the authenticated user belongs to.
@@ -308,10 +394,13 @@ func (h *Handler) ListGroups(c *gin.Context) {
 	}
 
 	rows, err := h.db.QueryContext(c.Request.Context(), `
-		SELECT g.id, g.name, g.currency, g.created_at
+		SELECT g.id, g.name, COALESCE(g.display_name, g.name), g.currency, g.created_at,
+		       (SELECT COUNT(*) FROM members m2 WHERE m2.group_id = g.id) AS member_count,
+		       c.last_four, c.card_type
 		FROM tally_groups g
 		JOIN members m ON m.group_id = g.id
-		WHERE m.user_id = $1
+		LEFT JOIN cards c ON c.member_id = m.id AND c.is_primary = TRUE AND c.status = 'active'
+		WHERE m.user_id = $1 AND g.archived_at IS NULL
 		ORDER BY g.created_at DESC`,
 		clerkUserID,
 	)
@@ -325,11 +414,18 @@ func (h *Handler) ListGroups(c *gin.Context) {
 	for rows.Next() {
 		var g groupSummary
 		var createdAt time.Time
-		if err := rows.Scan(&g.GroupID, &g.Name, &g.Currency, &createdAt); err != nil {
+		var lastFour, cardType sql.NullString
+		if err := rows.Scan(&g.GroupID, &g.Name, &g.DisplayName, &g.Currency, &createdAt, &g.MemberCount, &lastFour, &cardType); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "scan failed"})
 			return
 		}
 		g.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		if lastFour.Valid {
+			g.MyCardLastFour = &lastFour.String
+		}
+		if cardType.Valid {
+			g.MyCardType = &cardType.String
+		}
 		result = append(result, g)
 	}
 
@@ -376,7 +472,7 @@ func (h *Handler) GetGroup(c *gin.Context) {
 
 	var name, currency string
 	if err := h.db.QueryRowContext(c.Request.Context(),
-		`SELECT name, currency FROM tally_groups WHERE id = $1`, groupID,
+		`SELECT name, currency FROM tally_groups WHERE id = $1 AND archived_at IS NULL`, groupID,
 	).Scan(&name, &currency); err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "group not found"})
 		return
@@ -386,12 +482,15 @@ func (h *Handler) GetGroup(c *gin.Context) {
 	}
 
 	rows, err := h.db.QueryContext(c.Request.Context(), `
-		SELECT id, display_name, split_weight::float8, tally_balance_cents, is_leader,
-		       (card_token IS NOT NULL) AS has_card,
-		       kyc_status
-		FROM members
-		WHERE group_id = $1
-		ORDER BY is_leader DESC, display_name ASC`,
+		SELECT m.id,
+		       COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), m.display_name) AS display_name,
+		       m.split_weight::float8, m.tally_balance_cents, m.is_leader,
+		       (m.card_token IS NOT NULL) AS has_card,
+		       m.kyc_status
+		FROM members m
+		LEFT JOIN users u ON m.user_id = u.id
+		WHERE m.group_id = $1
+		ORDER BY m.is_leader DESC, m.display_name ASC`,
 		groupID,
 	)
 	if err != nil {
@@ -872,4 +971,44 @@ func (h *Handler) SettleIOU(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "settled"})
+}
+
+// ── DELETE /v1/groups/:id ────────────────────────────────────────────────────
+
+type archiveGroupResponse struct {
+	GroupID    string `json:"group_id"`
+	ArchivedAt string `json:"archived_at"`
+}
+
+// ArchiveGroup soft-deletes a group by setting archived_at. Leader only.
+func (h *Handler) ArchiveGroup(c *gin.Context) {
+	groupID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group_id"})
+		return
+	}
+
+	var archivedAt time.Time
+	err = h.db.QueryRowContext(c.Request.Context(), `
+		UPDATE tally_groups
+		SET archived_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND archived_at IS NULL
+		RETURNING archived_at`,
+		groupID,
+	).Scan(&archivedAt)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "group not found or already archived"})
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "archive group failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+		return
+	}
+
+	slog.InfoContext(c.Request.Context(), "group archived", "group_id", groupID)
+	c.JSON(http.StatusOK, archiveGroupResponse{
+		GroupID:    groupID.String(),
+		ArchivedAt: archivedAt.UTC().Format(time.RFC3339),
+	})
 }

@@ -25,6 +25,11 @@ func NewHandler(db *sql.DB, payment stripepayment.PaymentClient, identity stripe
 	return &Handler{db: db, payment: payment, identity: identity}
 }
 
+type meRequest struct {
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+}
+
 type meResponse struct {
 	UserID    string `json:"user_id"`
 	CreatedAt string `json:"created_at"`
@@ -42,12 +47,16 @@ func (h *Handler) Me(c *gin.Context) {
 		return
 	}
 
+	var req meRequest
+	// Body is optional — tolerate empty or missing JSON.
+	_ = c.ShouldBindJSON(&req)
+
 	var createdAt time.Time
 	err := h.db.QueryRowContext(c.Request.Context(), `
-		INSERT INTO users (id) VALUES ($1)
-		ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
+		INSERT INTO users (id, first_name, last_name) VALUES ($1, $2, $3)
+		ON CONFLICT (id) DO UPDATE SET first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name
 		RETURNING created_at`,
-		id,
+		id, req.FirstName, req.LastName,
 	).Scan(&createdAt)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})

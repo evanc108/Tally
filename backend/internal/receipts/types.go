@@ -15,6 +15,8 @@ type ParsedReceipt struct {
 	TaxCents      *int64        `json:"tax_cents,omitempty"`
 	TipCents      *int64        `json:"tip_cents,omitempty"`
 	TotalCents    *int64        `json:"total_cents,omitempty"`
+	MerchantName  string        `json:"merchant_name,omitempty"`
+	ReceiptDate   string        `json:"receipt_date,omitempty"`
 	Confidence    float64       `json:"confidence"`
 	Warnings      []string      `json:"warnings,omitempty"`
 }

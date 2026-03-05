@@ -35,6 +35,10 @@ enum TallyColors {
     static let hunterGreen = Color(hex: 0x2D6A4F)    // "Hunter Green"
     static let pineTeal    = Color(hex: 0x1B4332)    // "Pine Teal"
 
+    // Glass
+    static let glassBorder = Color.white.opacity(0.2)
+    static let glassShadow = Color.black.opacity(0.06)
+
     // Status — each has a background + foreground pair
     static let statusSuccess   = Color(hex: 0x0A7B0A)  // "Active Green" text
     static let statusSuccessBg = Color(hex: 0xE8F8E8)  // "Active Green" bg
