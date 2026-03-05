@@ -79,7 +79,7 @@ struct SignUpView: View {
                     signUpWithApple()
                 }
             }
-            .padding(.horizontal, TallySpacing.lg)
+            .padding(.horizontal, TallySpacing.screenPadding)
 
             Spacer()
 
@@ -121,8 +121,14 @@ struct SignUpView: View {
                     firstName: firstName,
                     lastName: lastName
                 )
+
                 if signUp.status == .complete {
-                    authManager.completeAuth()
+                    // No verification needed, go straight to identity verification
+                    authManager.requireIdentityVerification()
+                } else {
+                    // Email verification required — send code
+                    try await signUp.sendEmailCode()
+                    authManager.requireEmailVerification(email: email)
                 }
             } catch {
                 errorMessage = error.localizedDescription

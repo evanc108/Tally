@@ -109,10 +109,24 @@ func (h *JITHandler) Authorize(c *gin.Context) {
 		return
 	}
 
-	// ── Step 3: Build direct_pull funding plan for every member ──────────────
-	// BuildFundingPlan returns an error if any member is missing a payment
-	// method — enforced at join time, so this is a data-integrity assertion.
-	splits, err := waterfall.BuildFundingPlan(members, req.AmountCents)
+	// ── Step 3: Check for a finalized receipt session ────────────────────────
+	// If members used the receipt scanner to assign items before this swipe,
+	// use their pre-computed per-item amounts instead of split_weight.
+	// Falls back to split_weight if no active receipt exists or on error.
+	receiptID, receiptAmounts, receiptErr := waterfall.ResolveReceiptSplit(ctx, h.db, groupID)
+	if receiptErr != nil {
+		log.WarnContext(ctx, "receipt split resolution failed, falling back to split_weight",
+			"error", receiptErr)
+	}
+
+	// ── Step 4: Build funding plan ────────────────────────────────────────────
+	var splits []ledger.SplitEntry
+	if receiptID != uuid.Nil {
+		splits, err = waterfall.BuildReceiptFundingPlan(members, receiptAmounts)
+		log.InfoContext(ctx, "using receipt-based split", "receipt_id", receiptID)
+	} else {
+		splits, err = waterfall.BuildFundingPlan(members, req.AmountCents)
+	}
 	if err != nil {
 		log.ErrorContext(ctx, "funding plan failed", "error", err)
 		_ = h.setTransactionStatus(ctx, txnID, "DECLINED")
@@ -120,7 +134,28 @@ func (h *JITHandler) Authorize(c *gin.Context) {
 		return
 	}
 
-	// ── Step 4: Atomically post PENDING journal entries ───────────────────────
+	// Fix 4: if a receipt session produced zero splits (all members assigned
+	// $0 or no assignments exist despite a finalized receipt), fall back to
+	// split_weight rather than approving with nobody charged.
+	if len(splits) == 0 && receiptID != uuid.Nil {
+		log.WarnContext(ctx, "receipt plan yielded no splits, falling back to split_weight",
+			"receipt_id", receiptID)
+		splits, err = waterfall.BuildFundingPlan(members, req.AmountCents)
+		if err != nil {
+			log.ErrorContext(ctx, "fallback funding plan failed", "error", err)
+			_ = h.setTransactionStatus(ctx, txnID, "DECLINED")
+			c.JSON(http.StatusOK, JITResponse{Decision: "DECLINE", Reason: "card_not_linked"})
+			return
+		}
+	}
+	if len(splits) == 0 {
+		log.ErrorContext(ctx, "no funding plan produced — declining", "group_id", groupID)
+		_ = h.setTransactionStatus(ctx, txnID, "DECLINED")
+		c.JSON(http.StatusOK, JITResponse{Decision: "DECLINE", Reason: "no_funding_plan"})
+		return
+	}
+
+	// ── Step 5: Atomically post PENDING journal entries ───────────────────────
 	if err := ledger.PostPendingTransaction(ctx, h.db, txnID, groupAccountID, splits, nil); err != nil {
 		log.ErrorContext(ctx, "ledger post failed", "error", err)
 		_ = h.setTransactionStatus(ctx, txnID, "DECLINED")
@@ -128,10 +163,26 @@ func (h *JITHandler) Authorize(c *gin.Context) {
 		return
 	}
 
+	// ── Step 6: Link receipt to transaction (best-effort) ────────────────────
+	// Non-fatal: the transaction is already approved. If two concurrent JIT
+	// requests both read the same receipt, only one UPDATE matches because
+	// the second will find transaction_id already set.
+	if receiptID != uuid.Nil {
+		if _, linkErr := h.db.ExecContext(ctx,
+			`UPDATE receipts SET transaction_id = $1, updated_at = NOW()
+			 WHERE id = $2 AND transaction_id IS NULL`,
+			txnID, receiptID,
+		); linkErr != nil {
+			log.WarnContext(ctx, "failed to link receipt to transaction",
+				"receipt_id", receiptID, "transaction_id", txnID, "error", linkErr)
+		}
+	}
+
 	log.InfoContext(ctx, "JIT approved",
 		"transaction_id", txnID,
 		"amount_cents", req.AmountCents,
 		"member_count", len(members),
+		"receipt_split", receiptID != uuid.Nil,
 	)
 
 	c.JSON(http.StatusOK, JITResponse{

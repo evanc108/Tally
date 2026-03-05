@@ -6,9 +6,9 @@ struct WelcomeView: View {
     @State private var iconVisible = false
     @State private var logoVisible = false
     @State private var taglineVisible = false
+    @State private var featuresVisible = false
     @State private var buttonsVisible = false
     @State private var legalVisible = false
-    @State private var shimmerPhase: CGFloat = -1
     @State private var iconFloat: Bool = false
     @State private var gradientShift: Bool = false
 
@@ -17,8 +17,8 @@ struct WelcomeView: View {
             // Animated gradient background
             LinearGradient(
                 colors: gradientShift
-                    ? [Color(hex: 0x00B805), TallyColors.accentDark, Color(hex: 0x009504)]
-                    : [TallyColors.accent, TallyColors.accentDark],
+                    ? [Color(hex: 0x2D6A4F), TallyColors.hunterGreen, Color(hex: 0x1B4332)]
+                    : [TallyColors.seaGreen, TallyColors.hunterGreen],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -39,15 +39,16 @@ struct WelcomeView: View {
 
             VStack(spacing: 0) {
                 Spacer()
+                    .frame(minHeight: 40, maxHeight: 80)
 
                 // Icon with float animation
-                RoundedRectangle(cornerRadius: 24)
+                RoundedRectangle(cornerRadius: 28)
                     .fill(.white.opacity(0.15))
-                    .stroke(.white.opacity(0.2), lineWidth: 1)
-                    .frame(width: 80, height: 80)
+                    .stroke(.white.opacity(0.25), lineWidth: 1)
+                    .frame(width: 96, height: 96)
                     .overlay(
                         Image(systemName: "creditcard.fill")
-                            .font(.system(size: 32))
+                            .font(.system(size: 38))
                             .foregroundStyle(.white)
                     )
                     .offset(y: iconFloat ? -6 : 6)
@@ -56,30 +57,43 @@ struct WelcomeView: View {
 
                 // Logo
                 Text("tally")
-                    .font(.system(size: 52, weight: .black))
+                    .font(.system(size: 56, weight: .black))
                     .foregroundStyle(.white)
-                    .tracking(-2)
+                    .tracking(-2.5)
                     .padding(.top, TallySpacing.lg)
                     .scaleEffect(logoVisible ? 1 : 0.8)
                     .opacity(logoVisible ? 1 : 0)
                     .blur(radius: logoVisible ? 0 : 6)
 
                 // Tagline
-                Text("Split expenses, share cards, and settle up instantly with friends.")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
+                Text("Split expenses, share cards,\nand settle up instantly.")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.8))
                     .multilineTextAlignment(.center)
-                    .lineSpacing(4)
-                    .padding(.horizontal, TallySpacing.space48)
-                    .padding(.top, TallySpacing.md)
+                    .lineSpacing(5)
+                    .padding(.horizontal, TallySpacing.screenPadding)
+                    .padding(.top, TallySpacing.sm)
                     .offset(y: taglineVisible ? 0 : 16)
                     .opacity(taglineVisible ? 1 : 0)
 
                 Spacer()
+                    .frame(minHeight: 24, maxHeight: 48)
+
+                // Feature highlights
+                VStack(spacing: 12) {
+                    FeatureRow(icon: "person.2.fill", text: "Create circles with friends")
+                    FeatureRow(icon: "creditcard.fill", text: "Get virtual cards for group spending")
+                    FeatureRow(icon: "arrow.triangle.2.circlepath", text: "Auto-split and settle instantly")
+                }
+                .padding(.horizontal, TallySpacing.xxxl)
+                .offset(y: featuresVisible ? 0 : 20)
+                .opacity(featuresVisible ? 1 : 0)
+
                 Spacer()
+                    .frame(minHeight: 32, maxHeight: 60)
 
                 // Buttons
-                VStack(spacing: TallySpacing.sm) {
+                VStack(spacing: TallySpacing.md) {
                     Button("Get Started") {
                         authManager.showOnboarding()
                     }
@@ -94,15 +108,15 @@ struct WelcomeView: View {
                     .offset(y: buttonsVisible ? 0 : 40)
                     .opacity(buttonsVisible ? 1 : 0)
                 }
-                .padding(.horizontal, TallySpacing.lg)
+                .padding(.horizontal, TallySpacing.screenPadding)
 
                 // Legal
                 Text(legalText)
                     .font(.system(size: 11))
                     .multilineTextAlignment(.center)
-                    .padding(.top, TallySpacing.sm)
-                    .padding(.horizontal, TallySpacing.xl)
-                    .padding(.bottom, TallySpacing.xl)
+                    .padding(.top, TallySpacing.lg)
+                    .padding(.horizontal, TallySpacing.screenPadding)
+                    .padding(.bottom, TallySpacing.lg)
                     .opacity(legalVisible ? 1 : 0)
             }
         }
@@ -112,9 +126,8 @@ struct WelcomeView: View {
     // MARK: - Staggered Entrance
 
     private func runEntranceAnimations() {
-        // Reset
         iconVisible = false; logoVisible = false; taglineVisible = false
-        buttonsVisible = false; legalVisible = false; iconFloat = false
+        featuresVisible = false; buttonsVisible = false; legalVisible = false; iconFloat = false
 
         withAnimation(.spring(duration: 0.7, bounce: 0.35).delay(0.1)) {
             iconVisible = true
@@ -125,13 +138,15 @@ struct WelcomeView: View {
         withAnimation(.spring(duration: 0.5, bounce: 0.15).delay(0.4)) {
             taglineVisible = true
         }
-        withAnimation(.spring(duration: 0.6, bounce: 0.2).delay(0.55)) {
+        withAnimation(.spring(duration: 0.5, bounce: 0.15).delay(0.55)) {
+            featuresVisible = true
+        }
+        withAnimation(.spring(duration: 0.6, bounce: 0.2).delay(0.7)) {
             buttonsVisible = true
         }
-        withAnimation(.easeOut(duration: 0.4).delay(0.75)) {
+        withAnimation(.easeOut(duration: 0.4).delay(0.85)) {
             legalVisible = true
         }
-        // Continuous float
         withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true).delay(0.8)) {
             iconFloat = true
         }
@@ -139,17 +154,39 @@ struct WelcomeView: View {
 
     private var legalText: AttributedString {
         var text = AttributedString("By continuing, you agree to our Terms of Service and Privacy Policy")
-        text.foregroundColor = .white.withAlphaComponent(0.5)
+        text.foregroundColor = .white.withAlphaComponent(0.45)
 
         if let range = text.range(of: "Terms of Service") {
-            text[range].foregroundColor = .white.withAlphaComponent(0.7)
+            text[range].foregroundColor = .white.withAlphaComponent(0.65)
             text[range].underlineStyle = .single
         }
         if let range = text.range(of: "Privacy Policy") {
-            text[range].foregroundColor = .white.withAlphaComponent(0.7)
+            text[range].foregroundColor = .white.withAlphaComponent(0.65)
             text[range].underlineStyle = .single
         }
         return text
+    }
+}
+
+// MARK: - Feature Row
+
+private struct FeatureRow: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(width: 24)
+
+            Text(text)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white.opacity(0.75))
+
+            Spacer()
+        }
     }
 }
 
@@ -163,75 +200,49 @@ private struct CornerBlobs: View {
             let w = geo.size.width
             let h = geo.size.height
 
-            // Top-left blob
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [.white.opacity(0.14), .white.opacity(0)],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 180
+                        colors: [.white.opacity(0.10), .white.opacity(0)],
+                        center: .center, startRadius: 0, endRadius: 180
                     )
                 )
                 .frame(width: 360, height: 360)
                 .offset(x: -w * 0.35, y: -h * 0.08)
                 .offset(x: animate ? 8 : -8, y: animate ? 6 : -6)
 
-            // Top-right blob
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [.white.opacity(0.10), .white.opacity(0)],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 150
+                        colors: [.white.opacity(0.07), .white.opacity(0)],
+                        center: .center, startRadius: 0, endRadius: 150
                     )
                 )
                 .frame(width: 300, height: 300)
                 .offset(x: w * 0.55, y: -h * 0.05)
                 .offset(x: animate ? -6 : 6, y: animate ? 8 : -8)
 
-            // Mid-left blob
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [.white.opacity(0.08), .white.opacity(0)],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 140
+                        colors: [.white.opacity(0.06), .white.opacity(0)],
+                        center: .center, startRadius: 0, endRadius: 140
                     )
                 )
                 .frame(width: 280, height: 280)
                 .offset(x: -w * 0.25, y: h * 0.35)
                 .offset(x: animate ? 10 : -10)
 
-            // Bottom-right blob
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [.white.opacity(0.10), .white.opacity(0)],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 160
+                        colors: [.white.opacity(0.08), .white.opacity(0)],
+                        center: .center, startRadius: 0, endRadius: 160
                     )
                 )
                 .frame(width: 320, height: 320)
                 .offset(x: w * 0.5, y: h * 0.65)
                 .offset(x: animate ? -8 : 8, y: animate ? -6 : 6)
-
-            // Bottom-left accent
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [.white.opacity(0.06), .white.opacity(0)],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 120
-                    )
-                )
-                .frame(width: 240, height: 240)
-                .offset(x: -w * 0.15, y: h * 0.75)
-                .offset(y: animate ? -8 : 8)
         }
         .onAppear {
             withAnimation(.easeInOut(duration: 5).repeatForever(autoreverses: true)) {
@@ -260,7 +271,7 @@ private struct FloatingParticles: View {
                 let y = yRatio * size.height + shift * (yRatio > 0.5 ? -1 : 1)
                 context.fill(
                     Path(ellipseIn: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)),
-                    with: .color(.white.opacity(0.08))
+                    with: .color(.white.opacity(0.06))
                 )
             }
         }
@@ -279,11 +290,11 @@ private struct WelcomePrimaryButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: 16, weight: .bold))
             .tracking(-0.2)
-            .foregroundStyle(TallyColors.accent)
+            .foregroundStyle(TallyColors.hunterGreen)
             .frame(maxWidth: .infinity, minHeight: 56)
             .background(.white)
             .clipShape(RoundedRectangle(cornerRadius: TallyRadius.xl))
-            .shadow(color: .black.opacity(configuration.isPressed ? 0 : 0.1), radius: 12, y: 6)
+            .shadow(color: .black.opacity(configuration.isPressed ? 0 : 0.12), radius: 12, y: 6)
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .animation(.spring(duration: 0.3, bounce: 0.3), value: configuration.isPressed)
     }
@@ -296,11 +307,11 @@ private struct WelcomeSecondaryButtonStyle: ButtonStyle {
             .tracking(-0.2)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 56)
-            .background(.white.opacity(configuration.isPressed ? 0.25 : 0.15))
+            .background(.white.opacity(configuration.isPressed ? 0.2 : 0.1))
             .clipShape(RoundedRectangle(cornerRadius: TallyRadius.xl))
             .overlay(
                 RoundedRectangle(cornerRadius: TallyRadius.xl)
-                    .stroke(.white.opacity(0.3), lineWidth: 1.5)
+                    .stroke(.white.opacity(0.25), lineWidth: 1.5)
             )
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .animation(.spring(duration: 0.3, bounce: 0.3), value: configuration.isPressed)
