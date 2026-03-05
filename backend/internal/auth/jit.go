@@ -3,7 +3,7 @@
 // Flow overview:
 //  1. Card processor → POST /v1/auth/jit  (HMAC-verified, idempotent)
 //  2. Resolve card_token → group + all member rows  (Postgres, single query)
-//  3. Verify every member has a stripe_payment_method_id  (data integrity check)
+//  3. Verify every member has a stripe_payment_method_id (bank account)  (data integrity check)
 //  4. Build funding plan  → direct_pull for every member
 //  5. Post PENDING ledger entries atomically
 //  6. Respond APPROVE (or DECLINE if any step fails)

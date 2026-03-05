@@ -2,7 +2,7 @@
 
 ## Overview
 
-Tally's backend is a Go service that powers real-time group spending using a **Proxy Card Architecture**. Rather than sharing a single card, each group member receives their own unique virtual card token — all mapped to the same group. When any member taps their token at a merchant, the backend authorizes the charge in milliseconds by confirming that every member has a linked debit card, then charges each member's card asynchronously at settlement.
+Tally's backend is a Go service that powers real-time group spending using a **Proxy Card Architecture**. Rather than sharing a single card, each group member receives their own unique virtual card token — all mapped to the same group. When any member taps their token at a merchant, the backend authorizes the charge in milliseconds by confirming that every member has a linked bank account (ACH), then charges each member's bank account asynchronously at settlement via ACH Direct Debit.
 
 ---
 
@@ -15,8 +15,8 @@ Tally's backend is a Go service that powers real-time group spending using a **P
 | Database | PostgreSQL 16 | Double-entry ledger requires ACID guarantees + serializable transactions |
 | Cache / Lock | Redis 7 | Sub-millisecond idempotency checks and distributed locking |
 | Card Issuing | Stripe Issuing | Virtual card issuance; Apple/Google Wallet provisioning; JIT authorization webhooks |
-| Debit Charging | Stripe PaymentIntents | Settlement charges against linked debit cards |
-| Bank Linking | Stripe Financial Connections | Debit card attachment via SetupIntent |
+| ACH Charging | Stripe PaymentIntents | Settlement charges against linked bank accounts (ACH Direct Debit) |
+| Bank Linking | Stripe SetupIntent (us_bank_account) | Bank account attachment for ACH |
 | Identity / KYC | Stripe Identity | Document verification before card issuance |
 | Auth | Clerk | RS256 JWT verification via JWKS |
 | Schema Migrations | golang-migrate | SQL files embedded in the binary; runs automatically on boot |
@@ -118,8 +118,8 @@ One row per user per group. A user in three groups has three rows.
 | card_token | TEXT | Unique. The member's virtual card token (Stripe Issuing) |
 | stripe_cardholder_id | TEXT | Stripe Issuing cardholder ID |
 | stripe_card_id | TEXT | Stripe Issuing card ID |
-| stripe_payment_method_id | TEXT | Primary linked debit card. Used for settlement |
-| stripe_backup_payment_method_id | TEXT | Fallback debit card if primary fails |
+| stripe_payment_method_id | TEXT | Primary linked bank account (ACH). Used for settlement |
+| stripe_backup_payment_method_id | TEXT | Fallback bank account if primary fails |
 | kyc_status | TEXT | `pending` / `approved` / `rejected`. Card issuance requires `approved` |
 | tally_balance_cents | BIGINT | Reserved; not currently used |
 | split_weight | NUMERIC(7,6) | Fractional share (e.g. `0.250000` for a 4-way equal split). Sum across group must = 1.0 |
@@ -127,7 +127,7 @@ One row per user per group. A user in three groups has three rows.
 | leader_pre_authorized | BOOL | Leader has opted in to cover member card failures for the current outing |
 | leader_pre_authorized_at | TIMESTAMPTZ | When pre-authorization was set. Expires after 24 hours |
 
-Linking a debit card (`stripe_payment_method_id`) is required before a user can join a group. This invariant allows the JIT handler to always approve without checking balances.
+Linking a bank account (`stripe_payment_method_id`, ACH) is required before a user can join a group. This invariant allows the JIT handler to always approve without checking balances.
 
 ### `accounts`
 Ledger accounts. Each **member** gets one `asset` account. Each **group** gets one `liability` (clearing) account.
@@ -146,7 +146,7 @@ One row per card swipe. Tracks the lifecycle from authorization to settlement.
 | `PENDING` | Created when the swipe arrives |
 | `APPROVED` | Ledger entries written; Stripe told to approve |
 | `DECLINED` | Could not be authorized |
-| `SETTLED` | All members' debit cards have been charged |
+| `SETTLED` | All members' bank accounts have been charged (ACH) |
 | `REVERSED` | Transaction was unwound (e.g. merchant refund) |
 
 The `idempotency_key` column has a `UNIQUE` constraint as a backstop against duplicate processing if Redis is bypassed.
@@ -168,7 +168,7 @@ Records how each member's share will be (or was) collected. One row per member p
 
 | funding_type | Meaning |
 |---|---|
-| `direct_pull` | Charged to the member's linked debit card via Stripe at settlement |
+| `direct_pull` | Charged to the member's linked bank account via Stripe ACH at settlement |
 | `leader_overwrite` | Member's cards failed; leader's card covered the share. An IOU is recorded |
 | `tally_balance` | Reserved; not used in current flow |
 
@@ -293,7 +293,7 @@ Stripe's response deadline                         ~2,000ms
 Safety margin                                      ~40×
 ```
 
-This is possible because members must link a debit card before joining a group. By swipe time, every member is guaranteed to have a `stripe_payment_method_id`. No balance checks, no external calls needed.
+This is possible because members must link a bank account (ACH) before joining a group. By swipe time, every member is guaranteed to have a `stripe_payment_method_id`. No balance checks, no external calls needed.
 
 ```
 Stripe Issuing
@@ -391,7 +391,7 @@ Cancellation is available at any point before finalization (`DELETE /v1/groups/:
 
 ## Settlement
 
-Settlement is decoupled from authorization. Stripe has already fronted the merchant charge; settlement recoups that from each member's debit card.
+Settlement is decoupled from authorization. Stripe has already fronted the merchant charge; settlement recoups that from each member's bank account via ACH (typically ~1 day holding period).
 
 ```
 For each APPROVED transaction:

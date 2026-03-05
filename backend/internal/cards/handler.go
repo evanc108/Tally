@@ -147,24 +147,35 @@ func (h *Handler) IssueCard(c *gin.Context) {
 		return
 	}
 
-	// 3. Persist to the members row.
-	const q = `
-		UPDATE members
-		SET stripe_cardholder_id = $1,
-		    stripe_card_id       = $2,
-		    card_token           = $3,
-		    updated_at           = NOW()
-		WHERE id = $4 AND user_id = $5
+	// 3. Persist: INSERT into cards (trigger syncs to members.card_token for JIT).
+	// If the cards table does not exist (older migrations only), fall back to UPDATE members.
+	const insertCards = `
+		INSERT INTO cards (member_id, user_id, card_token, stripe_cardholder_id, stripe_card_id, status, is_primary)
+		VALUES ($1, $2, $3, $4, $5, 'active', TRUE)
 	`
-	res, err := h.db.ExecContext(ctx, q, cardholderID, cardID, cardToken, memberID, userID)
+	_, err = h.db.ExecContext(ctx, insertCards, memberID, userID, cardToken, cardholderID, cardID)
 	if err != nil {
-		slog.ErrorContext(ctx, "update member card IDs failed", "member_id", memberID, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
-		return
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
-		return
+		// Fallback: update members directly (pre-000015 schema or trigger missing).
+		const updateMembers = `
+			UPDATE members
+			SET stripe_cardholder_id = $1, stripe_card_id = $2, card_token = $3, updated_at = NOW()
+			WHERE id = $4 AND user_id = $5
+		`
+		res, upErr := h.db.ExecContext(ctx, updateMembers, cardholderID, cardID, cardToken, memberID, userID)
+		if upErr != nil {
+			slog.ErrorContext(ctx, "card persist failed", "member_id", memberID, "error", err, "fallback_error", upErr)
+			body := gin.H{"error": "db write failed"}
+			if h.cfg.Environment != "production" {
+				body["insert_error"] = err.Error()
+				body["fallback_error"] = upErr.Error()
+			}
+			c.JSON(http.StatusInternalServerError, body)
+			return
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
+			return
+		}
 	}
 
 	slog.InfoContext(ctx, "card issued", "member_id", memberID, "card_id", cardID)

@@ -1,13 +1,13 @@
 // Package settlement implements the async worker that charges each member's
-// Stripe PaymentMethod after a transaction is approved by the JIT handler.
+// Stripe PaymentMethod (ACH bank account) after a transaction is approved by the JIT handler.
 //
 // Settlement is intentionally decoupled from authorization:
 //  - JIT approves immediately (~20–50 ms, Postgres-only).
 //  - Settlement runs right after JIT responds (or on a 30-second poll as a
-//    safety net) and handles card charges, retries, and leader cover.
+//    safety net) and handles ACH pulls, retries, and leader cover.
 //
 // Retry logic (per member):
-//  1. Charge stripe_payment_method_id (primary).
+//  1. Charge stripe_payment_method_id (primary bank account).
 //  2. On failure: retry primary once.
 //  3. On retry failure: charge stripe_backup_payment_method_id (backup).
 //  4. On both fail + valid leader authorization (within 24h):

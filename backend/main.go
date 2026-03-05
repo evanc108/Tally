@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"github.com/tally/backend/internal/auth"
@@ -191,6 +192,26 @@ func main() {
 		groupMember.PUT("/receipts/:receiptId/assignments", sessionHandler.UpsertAssignments)
 		groupMember.POST("/receipts/:receiptId/finalize", sessionHandler.FinalizeReceipt)
 		groupMember.DELETE("/receipts/:receiptId", sessionHandler.CancelReceipt)
+	}
+
+	// ── Dev-only: trigger settlement for an APPROVED transaction ───────────────
+	// Allows testing settlement without waiting for the 30-second sweep.
+	if cfg.Environment != "production" {
+		v1.POST("/dev/settle/:txnId", func(c *gin.Context) {
+			txnID, err := uuid.Parse(c.Param("txnId"))
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid transaction_id"})
+				return
+			}
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
+			defer cancel()
+			if err := settlement.SettleApprovedTransaction(ctx, pool, paymentClient, txnID); err != nil {
+				slog.Error("dev settle failed", "transaction_id", txnID, "error", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"status": "settlement_completed"})
+		})
 	}
 
 	// ── HTTP server with graceful shutdown ────────────────────────────────────

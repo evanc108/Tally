@@ -90,7 +90,7 @@ func PostPendingTransaction(
 			base := i * 8
 			memo := fmt.Sprintf("split allocation — txn %s", txnID)
 			entryPlaceholders = append(entryPlaceholders,
-				fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)", base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8),
+				fmt.Sprintf("($%d::uuid,$%d::uuid,$%d::uuid,$%d::uuid,$%d::bigint,$%d::text,$%d::text,$%d::timestamptz)", base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8),
 			)
 			entryArgs = append(entryArgs,
 				uuid.New(), txnID,
@@ -113,9 +113,9 @@ func PostPendingTransaction(
 		pullPlaceholders := make([]string, 0, len(splits))
 		for i, s := range splits {
 			base := i * 6
-			pullPlaceholders = append(pullPlaceholders,
-				fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d)", base+1, base+2, base+3, base+4, base+5, base+6),
-			)
+		pullPlaceholders = append(pullPlaceholders,
+			fmt.Sprintf("($%d::uuid,$%d::uuid,$%d::uuid,$%d::bigint,$%d::text,$%d::timestamptz)", base+1, base+2, base+3, base+4, base+5, base+6),
+		)
 			pullArgs = append(pullArgs,
 				uuid.New(), s.MemberID, txnID, s.AmountCents, string(s.FundingType), now,
 			)
