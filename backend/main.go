@@ -131,7 +131,7 @@ func main() {
 
 		// ── User-facing routes (Clerk JWT required) ───────────────────────────
 		api := v1.Group("")
-		api.Use(middleware.RateLimit(rdb, 60, time.Minute))
+		api.Use(middleware.RateLimit(rdb, 300, time.Minute))
 		if cfg.ClerkJWKSURL != "" {
 			api.Use(middleware.ClerkAuth(cfg.ClerkJWKSURL))
 		} else {
@@ -182,7 +182,7 @@ func main() {
 		// ── Receipt parsing (stateless, rate-limited) ────────────────────────
 		receiptHandler := receipts.NewHandler(cfg.GeminiAPIKey, cfg.GeminiModel)
 		receiptGroup := api.Group("/receipts")
-		receiptGroup.Use(middleware.RateLimit(rdb, 30, time.Minute))
+		receiptGroup.Use(middleware.RateLimit(rdb, 120, time.Minute))
 		receiptGroup.POST("/parse", receiptHandler.ParseReceipt)
 
 		// ── WebSocket for real-time session updates ──────────────────────

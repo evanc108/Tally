@@ -37,6 +37,10 @@ final class PayFlowViewModel {
     var paymentMethods: [PaymentMethod] = []
     var selectedPaymentMethod: PaymentMethod?
 
+    // MARK: - Pre-selection
+
+    var preselectedCircle: TallyCircle?
+
     // MARK: - Scanning State
 
     var isScanning = false
@@ -88,19 +92,17 @@ final class PayFlowViewModel {
 
     // MARK: - Circles & Payment Methods
 
+    /// Loads pre-fetched circles and builds payment methods — no network call needed.
+    func loadCircles(_ preloaded: [TallyCircle]) {
+        circles = preloaded
+        buildPaymentMethods()
+    }
+
     /// Fetches the user's circles and builds the payment method list from card data.
-    /// Also syncs the user's name from Clerk to the backend.
+    /// Only called when no pre-loaded circles are available.
     func fetchCirclesWithCards() async {
         isLoading = true
         defer { isLoading = false }
-
-        // Sync user name to backend (non-blocking, best-effort)
-        let first = Clerk.shared.user?.firstName ?? ""
-        let last = Clerk.shared.user?.lastName ?? ""
-        if !first.isEmpty || !last.isEmpty {
-            let body = ["first_name": first, "last_name": last]
-            let _: MeResponseDTO? = try? await APIClient.shared.post(path: "/v1/users/me", body: body)
-        }
 
         do {
             let response: ListCirclesResponseDTO = try await APIClient.shared.get(
@@ -149,6 +151,13 @@ final class PayFlowViewModel {
     private static let lastPaymentMethodKey = "lastPaymentMethodId"
 
     private func restoreOrAutoSelect() {
+        // If a circle was pre-selected (e.g. from CircleFeedView), auto-select its card
+        if let pre = preselectedCircle,
+           let match = paymentMethods.first(where: { $0.groupId == pre.serverId && $0.kind == .circleCard }) {
+            selectPaymentMethod(match)
+            return
+        }
+
         let lastId = UserDefaults.standard.string(forKey: Self.lastPaymentMethodKey)
         if let lastId, let match = paymentMethods.first(where: { $0.id == lastId }) {
             selectPaymentMethod(match)
@@ -452,6 +461,44 @@ final class PayFlowViewModel {
         }
         for i in splits.indices {
             splits[i].tipCents = floors[i]
+        }
+    }
+
+    // MARK: - Receipt Persistence
+
+    /// Saves the current receipt to the backend for the selected circle.
+    /// On success, updates `receipt.serverId` with the server-assigned ID.
+    func saveReceipt() async {
+        guard let groupId = selectedCircle?.serverId else { return }
+        guard let receipt else { return }
+
+        let body = SaveReceiptRequestDTO(
+            subtotalCents: receipt.subtotalCents,
+            taxCents: receipt.taxCents,
+            tipCents: receipt.tipCents,
+            totalCents: receipt.totalCents,
+            currency: receipt.currency,
+            merchantName: merchantName,
+            items: receipt.items.map { item in
+                ReceiptItemDTO(
+                    name: item.name,
+                    quantity: item.quantity,
+                    unitCents: item.unitCents,
+                    totalCents: item.totalCents
+                )
+            }
+        )
+
+        do {
+            struct SavedReceipt: Decodable { let id: String }
+            let dto: SavedReceipt = try await APIClient.shared.post(
+                path: "/v1/groups/\(groupId)/receipts",
+                body: body
+            )
+            self.receipt?.serverId = dto.id
+        } catch {
+            // Non-fatal — receipt saving is best-effort.
+            // The payment flow can proceed without a persisted receipt.
         }
     }
 

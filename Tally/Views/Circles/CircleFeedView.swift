@@ -23,6 +23,7 @@ struct CircleFeedView: View {
     @State private var shouldCloseCircle = false
     @State private var isClosing = false
     @State private var closeError: String?
+    @State private var showPayFlow = false
 
     // MARK: - Body
 
@@ -39,8 +40,9 @@ struct CircleFeedView: View {
             }
             .background(TallyColors.bgPrimary)
         }
-        .toolbarBackground(TallyColors.accent, for: .navigationBar)
-        .tint(.white)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarColorScheme(.dark, for: .navigationBar)
+        .background(NavBarConfigurator(color: UIColor(TallyColors.accent)))
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Text(circle.name)
@@ -51,7 +53,7 @@ struct CircleFeedView: View {
                 Button { showSettings = true } label: {
                     Image(systemName: "gearshape")
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(TallyColors.ink)
+                        .foregroundStyle(.white)
                 }
             }
         }
@@ -71,6 +73,14 @@ struct CircleFeedView: View {
         }
         .sheet(isPresented: $showAddMoney) { AddMoneySheet() }
         .sheet(isPresented: $showSettleUp) { SettleUpSheet(circle: circle) }
+        .fullScreenCover(isPresented: $showPayFlow, onDismiss: {
+            Task { await viewModel.fetchCircleDetail(for: circle) }
+        }) {
+            PayFlowView(preselectedCircle: circle, availableCircles: viewModel.circles)
+        }
+        .task {
+            await viewModel.fetchCircleDetail(for: circle)
+        }
         .overlay {
             if isClosing {
                 ZStack {
@@ -164,6 +174,10 @@ struct CircleFeedView: View {
 
     private var actionButtonRow: some View {
         HStack(spacing: 0) {
+            Spacer()
+            circleActionButton(icon: "dollarsign", label: "Pay", color: .white.opacity(0.25)) {
+                showPayFlow = true
+            }
             Spacer()
             circleActionButton(icon: "plus", label: "Add\nMoney", color: .white.opacity(0.25)) {
                 showAddMoney = true
@@ -727,5 +741,63 @@ private struct SettleUpSheet: View {
                 Button("Cancel") { dismiss() }.foregroundStyle(TallyColors.accent)
             }}
         }
+    }
+}
+
+// MARK: - Navigation Bar Color (UIKit bridge)
+
+/// Accesses the actual UINavigationController to set the bar appearance directly.
+/// Unlike UINavigationBar.appearance() (a proxy that only affects new instances),
+/// this targets the live navigation bar — so the color always applies.
+private struct NavBarConfigurator: UIViewControllerRepresentable {
+    let color: UIColor
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let vc = NavBarConfiguratorVC(color: color)
+        return vc
+    }
+
+    func updateUIViewController(_ vc: UIViewController, context: Context) {}
+}
+
+private class NavBarConfiguratorVC: UIViewController {
+    let color: UIColor
+
+    init(color: UIColor) {
+        self.color = color
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        applyAppearance()
+    }
+
+    override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        applyAppearance()
+    }
+
+    private func applyAppearance() {
+        guard let nav = navigationController else { return }
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = color
+        appearance.shadowColor = .clear
+        nav.navigationBar.standardAppearance = appearance
+        nav.navigationBar.scrollEdgeAppearance = appearance
+        nav.navigationBar.compactAppearance = appearance
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        guard let nav = navigationController else { return }
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithDefaultBackground()
+        nav.navigationBar.standardAppearance = appearance
+        nav.navigationBar.scrollEdgeAppearance = appearance
+        nav.navigationBar.compactAppearance = appearance
     }
 }

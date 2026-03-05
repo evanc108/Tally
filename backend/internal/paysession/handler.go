@@ -985,6 +985,15 @@ func (h *Handler) SimulateTap(c *gin.Context) {
 		// Just log the error; the session can be reconciled later.
 	}
 
+	// ── Step 10: Auto-settle (simulation only) ──────────────────────────────
+	// In simulation mode there are no real Stripe PM IDs, so the settlement
+	// worker would fail. Settle immediately: mark journal entries + funding
+	// pulls as SETTLED/COMPLETED and deduct from member tally_balance_cents
+	// so the UI reflects the "payment".
+	if err := h.autoSettle(ctx, txnID, splits); err != nil {
+		log.ErrorContext(ctx, "auto-settle failed (non-fatal)", "error", err)
+	}
+
 	log.InfoContext(ctx, "simulate-tap approved",
 		"transaction_id", txnID,
 		"amount_cents", totalCents,
@@ -1086,4 +1095,53 @@ func (h *Handler) declineTransaction(ctx context.Context, txnID uuid.UUID) {
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to decline transaction", "transaction_id", txnID, "error", err)
 	}
+}
+
+// autoSettle immediately settles a simulated transaction so the full lifecycle
+// completes without waiting for the settlement worker (which would fail in mock
+// mode because members have no Stripe payment method IDs).
+func (h *Handler) autoSettle(ctx context.Context, txnID uuid.UUID, splits []ledger.SplitEntry) error {
+	tx, err := h.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return fmt.Errorf("begin auto-settle tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	now := time.Now().UTC()
+
+	// Mark journal entries as SETTLED.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE journal_entries SET status = 'SETTLED', settled_at = $1 WHERE transaction_id = $2 AND status = 'PENDING'`,
+		now, txnID,
+	); err != nil {
+		return fmt.Errorf("settle journal entries: %w", err)
+	}
+
+	// Mark funding pulls as COMPLETED.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE funding_pulls SET status = 'COMPLETED', updated_at = $1 WHERE transaction_id = $2 AND status = 'PENDING'`,
+		now, txnID,
+	); err != nil {
+		return fmt.Errorf("complete funding pulls: %w", err)
+	}
+
+	// Deduct from each member's tally_balance_cents for UI visibility.
+	for _, s := range splits {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE members SET tally_balance_cents = tally_balance_cents - $1, updated_at = $2 WHERE id = $3`,
+			s.AmountCents, now, s.MemberID,
+		); err != nil {
+			return fmt.Errorf("deduct member balance (member %s): %w", s.MemberID, err)
+		}
+	}
+
+	// Mark the transaction as SETTLED.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE transactions SET status = 'SETTLED', updated_at = $1 WHERE id = $2`,
+		now, txnID,
+	); err != nil {
+		return fmt.Errorf("settle transaction: %w", err)
+	}
+
+	return tx.Commit()
 }

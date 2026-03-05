@@ -130,6 +130,64 @@ struct GroupMemberDTO: Decodable {
     }
 }
 
+// MARK: - Transactions
+
+/// Response from GET /v1/groups/:id/transactions
+struct ListTransactionsResponseDTO: Decodable {
+    let transactions: [TransactionSummaryDTO]
+}
+
+struct TransactionSummaryDTO: Decodable {
+    let id: String
+    let amountCents: Int64
+    let currency: String
+    let merchantName: String?
+    let merchantCategory: String?
+    let status: String
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case amountCents      = "amount_cents"
+        case currency
+        case merchantName     = "merchant_name"
+        case merchantCategory = "merchant_category"
+        case status
+        case createdAt        = "created_at"
+    }
+}
+
+extension CircleTransaction {
+    /// Maps a backend transaction summary into a CircleTransaction.
+    init(from dto: TransactionSummaryDTO) {
+        let isoFormatter = ISO8601DateFormatter()
+        self.title = dto.merchantName ?? "Payment"
+        self.amount = Double(dto.amountCents) / 100.0
+        self.paidBy = "Circle"
+        self.emoji = Self.emojiForCategory(dto.merchantCategory)
+        self.status = Self.statusFromString(dto.status)
+        self.date = isoFormatter.date(from: dto.createdAt) ?? .now
+    }
+
+    private static func emojiForCategory(_ category: String?) -> String {
+        guard let cat = category?.lowercased() else { return "💳" }
+        if cat.contains("food") || cat.contains("restaurant") { return "🍽️" }
+        if cat.contains("grocery") { return "🛒" }
+        if cat.contains("transport") || cat.contains("uber") || cat.contains("lyft") { return "🚗" }
+        if cat.contains("entertainment") { return "🎬" }
+        if cat.contains("utility") || cat.contains("electric") { return "⚡" }
+        return "💳"
+    }
+
+    private static func statusFromString(_ status: String) -> TransactionStatus {
+        switch status.uppercased() {
+        case "SETTLED":  return .settled
+        case "DECLINED": return .declined
+        default:         return .pending
+        }
+    }
+}
+
 // MARK: - Update Circle
 
 /// Request body for PATCH /v1/groups/:groupID

@@ -9,6 +9,11 @@ final class CirclesViewModel {
     var error: TallyError?
     private var hasFetched = false
 
+    /// Hardcoded starting balance per circle for UI testing.
+    /// Backend tally_balance_cents starts at 0 and goes negative on spend,
+    /// so this offset makes the displayed balance = startingBalance + delta.
+    static let startingBalance: Double = 100
+
     private static let deletedKey = "tally.deletedCircleIDs"
 
     /// Server IDs of circles the user deleted locally — persisted across app launches.
@@ -31,8 +36,9 @@ final class CirclesViewModel {
 
     // MARK: - Fetch
 
-    func fetchCircles() async {
-        // Allow first fetch to populate; subsequent calls refresh in-place
+    func fetchCircles(force: Bool = false) async {
+        // Skip if already fetched — callers pass force: true to refresh
+        if hasFetched && !force { return }
         let isFirstFetch = !hasFetched
         hasFetched = true
         isLoading = true
@@ -68,12 +74,9 @@ final class CirclesViewModel {
                     // Fallback: merge from disk persistence
                     saved.apply(to: &circle)
                 }
-                // TODO: Remove — placeholder activity for UI development
-                if circle.transactions.isEmpty {
-                    circle.transactions = Self.placeholderActivity(for: index)
-                }
+                // Default wallet balance for UI testing
                 if circle.walletBalance == 0 {
-                    circle.walletBalance = Self.placeholderBalances[index % Self.placeholderBalances.count]
+                    circle.walletBalance = Self.startingBalance
                 }
                 return circle
             }
@@ -176,19 +179,44 @@ final class CirclesViewModel {
         circles.removeAll { $0.id == circle.id }
     }
 
-    // MARK: - Placeholder Data (TODO: remove when real activity is wired up)
+    // MARK: - Circle Detail (transactions + balance)
 
-    private static let placeholderBalances: [Double] = [320, 800, 250, 150, 475]
+    /// Fetches transactions and member balances for a specific circle from the backend.
+    /// Updates the circle in-place with real data.
+    func fetchCircleDetail(for circle: TallyCircle) async {
+        guard let serverId = circle.serverId else { return }
 
-    private static func placeholderActivity(for index: Int) -> [CircleTransaction] {
-        let sets: [[CircleTransaction]] = [
-            [CircleTransaction(title: "Groceries", amount: 86.40, paidBy: "Sarah", emoji: "🛒", status: .settled, date: .now.addingTimeInterval(-3600))],
-            [CircleTransaction(title: "Electric bill", amount: 142.00, paidBy: "You", emoji: "⚡", status: .pending, date: .now)],
-            [CircleTransaction(title: "Dinner", amount: 65.00, paidBy: "Alex", emoji: "🍽️", status: .settled, date: .now.addingTimeInterval(-7200))],
-            [CircleTransaction(title: "Uber", amount: 28.50, paidBy: "Jordan", emoji: "🚗", status: .pending, date: .now.addingTimeInterval(-1800))],
-            [CircleTransaction(title: "Netflix", amount: 22.99, paidBy: "You", emoji: "🎬", status: .settled, date: .now.addingTimeInterval(-86400))],
-        ]
-        return sets[index % sets.count]
+        // Fetch transactions and group detail in parallel
+        async let txnTask: ListTransactionsResponseDTO? = {
+            try? await APIClient.shared.get(path: "/v1/groups/\(serverId)/transactions")
+        }()
+        async let detailTask: GroupDetailResponseDTO? = {
+            try? await APIClient.shared.get(path: "/v1/groups/\(serverId)")
+        }()
+
+        let txnResponse = await txnTask
+        let detailResponse = await detailTask
+
+        guard let idx = circles.firstIndex(where: { $0.id == circle.id }) else { return }
+
+        // Map backend transactions → CircleTransaction
+        if let txns = txnResponse?.transactions {
+            circles[idx].transactions = txns.map { CircleTransaction(from: $0) }
+        }
+
+        // Compute wallet balance: starting balance + backend delta.
+        // tally_balance_cents starts at 0 and goes negative as members spend,
+        // so we add it to the hardcoded starting balance for consistency.
+        if let members = detailResponse?.members {
+            let deltaCents = members.reduce(Int64(0)) { $0 + $1.tallyBalanceCents }
+            circles[idx].walletBalance = Self.startingBalance + Double(deltaCents) / 100.0
+        }
+    }
+
+    /// Refreshes a circle by serverId — called after payment completes.
+    func refreshCircle(serverId: String) async {
+        guard let circle = circles.first(where: { $0.serverId == serverId }) else { return }
+        await fetchCircleDetail(for: circle)
     }
 
     // MARK: - Private

@@ -8,6 +8,15 @@
 import SwiftUI
 import ClerkKit
 
+// MARK: - Scroll Offset Preference
+
+private struct ScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 // MARK: - Tab Definition
 
 enum TallyTab: Int, CaseIterable {
@@ -53,29 +62,6 @@ struct ContentView: View {
     @State private var circlesViewModel = CirclesViewModel()
     @State private var showPayFlow = false
 
-    init() {
-        // Force frosted dark glass tab bar on boot
-        let appearance = UITabBarAppearance()
-        appearance.configureWithDefaultBackground()
-        appearance.backgroundColor = UIColor(white: 0.08, alpha: 0.4)
-        appearance.backgroundEffect = UIBlurEffect(style: .systemChromeMaterialDark)
-
-        // White icons + labels
-        let normal = UITabBarItemAppearance()
-        normal.normal.iconColor = .white
-        normal.normal.titleTextAttributes = [.foregroundColor: UIColor.white]
-        normal.selected.iconColor = .white
-        normal.selected.titleTextAttributes = [.foregroundColor: UIColor.white]
-
-        appearance.stackedLayoutAppearance = normal
-        appearance.inlineLayoutAppearance = normal
-        appearance.compactInlineLayoutAppearance = normal
-
-        UITabBar.appearance().standardAppearance = appearance
-        UITabBar.appearance().scrollEdgeAppearance = appearance
-        UITabBar.appearance().tintColor = .white
-    }
-
     var body: some View {
         TabView(selection: $selectedTab) {
             Tab("Home", systemImage: "house", value: .home) {
@@ -87,15 +73,9 @@ struct ContentView: View {
             Tab(value: .pay) {
                 EmptyView()
             } label: {
-                Label {
-                    Text("")
-                } icon: {
-                    Image(systemName: "dollarsign.circle.fill")
-                        .imageScale(.large)
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, TallyColors.accent)
-                        .font(.system(size: 40))
-                }
+                Label("Pay", systemImage: "dollarsign.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, TallyColors.accent)
             }
             Tab("Wallet", systemImage: "wallet.bifold", value: .wallet) {
                 WalletTab()
@@ -104,7 +84,7 @@ struct ContentView: View {
                 ProfileTab()
             }
         }
-        .tint(.white)
+        .tint(.black)
         .task {
             await circlesViewModel.fetchCircles()
         }
@@ -116,8 +96,10 @@ struct ContentView: View {
                 previousTab = newTab
             }
         }
-        .fullScreenCover(isPresented: $showPayFlow) {
-            PayFlowView()
+        .fullScreenCover(isPresented: $showPayFlow, onDismiss: {
+            Task { await circlesViewModel.fetchCircles(force: true) }
+        }) {
+            PayFlowView(availableCircles: circlesViewModel.circles)
         }
     }
 }
@@ -164,9 +146,11 @@ extension ActivityItem {
 private struct HomeTab: View {
     let circles: [TallyCircle]
 
-    private let items = ActivityItem.samples
+    // Track scroll offset for header fade
+    @State private var scrollOffset: CGFloat = 0
 
     private var groupedItems: [(label: String, items: [ActivityItem])] {
+        let items = ActivityItem.samples
         let calendar = Calendar.current
         let fmt = DateFormatter()
         fmt.dateFormat = "MMM d"
@@ -190,76 +174,105 @@ private struct HomeTab: View {
             }
     }
 
+    /// Hardcoded total balance for UI testing.
+    private var totalBalance: String { "$1,000.00" }
+
+    /// Header opacity: fully visible until 60pt scroll, fades out by 140pt
+    private var headerOpacity: Double {
+        let fadeStart: CGFloat = 60
+        let fadeEnd: CGFloat = 140
+        if scrollOffset <= fadeStart { return 1 }
+        if scrollOffset >= fadeEnd { return 0 }
+        return Double(1 - (scrollOffset - fadeStart) / (fadeEnd - fadeStart))
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 topBar
-                balanceSection
-                quickActions
+                balanceRow
                 if !circles.isEmpty { circleCarousel }
                 transactionsHeader
                 transactionsList
             }
             .padding(.bottom, TallySpacing.lg)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: ScrollOffsetKey.self,
+                        value: -geo.frame(in: .named("homeScroll")).minY
+                    )
+                }
+            )
         }
+        .coordinateSpace(name: "homeScroll")
+        .onPreferenceChange(ScrollOffsetKey.self) { scrollOffset = $0 }
         .background(TallyColors.bgPrimary)
     }
 
-    // MARK: - Top Bar
+    // MARK: - Top Bar (scrolls with content, fades on deep scroll)
 
     private var topBar: some View {
-        HStack {
-            Spacer()
-            Button {} label: {
-                Image(systemName: "bell")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(TallyColors.textPrimary)
-                    .frame(width: 40, height: 40)
-                    .liquidGlass(in: Circle())
+        ZStack {
+            Text("Mntly")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(TallyColors.textPrimary)
+
+            HStack {
+                Spacer()
+                Button {} label: {
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(TallyColors.textPrimary)
+                        .frame(width: 44, height: 44)
+                        .liquidGlass(in: Circle())
+                }
             }
         }
         .padding(.horizontal, TallySpacing.screenPadding)
         .padding(.top, TallySpacing.sm)
+        .opacity(headerOpacity)
     }
 
-    // MARK: - Balance
+    // MARK: - Balance Row (left-aligned balance + right-aligned pills)
 
-    private var balanceSection: some View {
-        VStack(spacing: TallySpacing.xs) {
-            Text("Total Balance")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(TallyColors.textSecondary)
-            Text("$1,224.00")
-                .font(.system(size: 48, weight: .bold, design: .rounded))
-                .foregroundStyle(TallyColors.textPrimary)
-        }
-        .padding(.top, TallySpacing.lg)
-        .padding(.bottom, TallySpacing.xl)
-        .frame(maxWidth: .infinity)
-    }
+    private var balanceRow: some View {
+        HStack(alignment: .bottom) {
+            // Left: balance stack
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Total Balance")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(TallyColors.textPrimary)
+                Text(totalBalance)
+                    .font(.system(size: 38, weight: .bold, design: .rounded))
+                    .foregroundStyle(TallyColors.textPrimary)
+            }
 
-    // MARK: - Quick Actions
+            Spacer()
 
-    private var quickActions: some View {
-        HStack(spacing: TallySpacing.md) {
-            quickActionPill(icon: "plus", label: "Add Money")
-            quickActionPill(icon: "arrow.up.right", label: "Send")
+            // Right: compact pill buttons
+            HStack(spacing: TallySpacing.sm) {
+                quickActionPill(icon: "plus", label: "Add")
+                quickActionPill(icon: "arrow.up.right", label: "Send")
+            }
         }
         .padding(.horizontal, TallySpacing.screenPadding)
-        .padding(.bottom, TallySpacing.xl)
+        .padding(.top, TallySpacing.lg)
+        .padding(.bottom, TallySpacing.xxxl)
     }
 
     private func quickActionPill(icon: String, label: String) -> some View {
-        HStack(spacing: TallySpacing.sm) {
+        HStack(spacing: 4) {
             Image(systemName: icon)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
             Text(label)
-                .font(TallyFont.bodySemibold)
+                .font(.system(size: 13, weight: .semibold))
         }
-        .foregroundStyle(TallyColors.textPrimary)
-        .frame(maxWidth: .infinity)
-        .frame(height: 44)
-        .liquidGlassInteractive(in: Capsule())
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .frame(height: 36)
+        .background(TallyColors.accent)
+        .clipShape(Capsule())
     }
 
     // MARK: - Circle Carousel
@@ -399,9 +412,9 @@ private struct MiniTallyCard: View {
             ZStack {
                 LinearGradient(
                     colors: [
-                        Color(hex: 0x7B61FF),
-                        Color(hex: 0x9B7BFF),
-                        Color(hex: 0x6A4FD4),
+                        TallyColors.accent,
+                        TallyColors.mintLeaf,
+                        TallyColors.hunterGreen,
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
@@ -420,7 +433,7 @@ private struct MiniTallyCard: View {
             RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius)
                 .strokeBorder(Color.white.opacity(0.2), lineWidth: 0.5)
         )
-        .shadow(color: Color(hex: 0x7B61FF).opacity(0.3), radius: 16, y: 8)
+        .shadow(color: TallyColors.hunterGreen.opacity(0.3), radius: 16, y: 8)
     }
 }
 
@@ -524,7 +537,7 @@ private struct CirclesTab: View {
                 await viewModel.fetchCircles()
             }
             .refreshable {
-                await viewModel.fetchCircles()
+                await viewModel.fetchCircles(force: true)
             }
         }
     }

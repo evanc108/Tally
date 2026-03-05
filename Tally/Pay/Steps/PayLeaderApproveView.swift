@@ -79,6 +79,8 @@ struct PayLeaderApproveView: View {
             Button {
                 Task {
                     viewModel.error = nil
+                    // Save receipt to backend (best-effort, non-blocking on failure)
+                    await viewModel.saveReceipt()
                     await viewModel.createSession()
                     guard viewModel.error == nil else { return }
                     await viewModel.submitSplits()

@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct PayFlowView: View {
+    var preselectedCircle: TallyCircle? = nil
+    /// Pre-loaded circles from CirclesViewModel — avoids re-fetching GET /v1/groups.
+    var availableCircles: [TallyCircle] = []
     @State private var viewModel = PayFlowViewModel()
     @Environment(\.dismiss) private var dismiss
 
@@ -23,7 +26,12 @@ struct PayFlowView: View {
                 }
         }
         .task {
-            await viewModel.fetchCirclesWithCards()
+            viewModel.preselectedCircle = preselectedCircle
+            if availableCircles.isEmpty {
+                await viewModel.fetchCirclesWithCards()
+            } else {
+                viewModel.loadCircles(availableCircles)
+            }
         }
     }
 
