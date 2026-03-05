@@ -124,6 +124,19 @@ Reversals (merchant refunds) create new offsetting entries — original records 
 6. Settlement worker immediately charges each member's debit card
 7. All members see the transaction in-app with their individual share
 
+### Itemized Splitting (Receipt Sessions)
+
+When the group receives a bill before paying — e.g. a restaurant check — members can claim individual items so each person pays only what they ordered:
+
+1. **Scan the receipt** — any member scans/uploads the bill; the backend parses it into line items
+2. **Start a session** — `POST /v1/groups/:id/receipts` saves the parsed receipt as a draft in the database
+3. **Claim items** — each member calls `PUT /v1/groups/:id/receipts/:receiptId/assignments` to indicate which items (and what share of each) they want to pay
+4. **Leader finalizes** — `POST /v1/groups/:id/receipts/:receiptId/finalize` locks in the assignments (leader-only)
+5. **Swipe the card** — when the card is tapped at the merchant, the JIT handler detects the finalized receipt and uses the item-based amounts instead of the default split weights
+6. **Receipt consumed** — the receipt is atomically linked to the transaction so it can only be used once
+
+If no finalized receipt is found at swipe time (or assignments cover nothing), JIT falls back to the standard `split_weight` allocation. If a receipt exists but produces zero splits, the transaction is declined.
+
 ### When a Member's Card Fails at Settlement
 
 1. **Retry** — The settlement worker retries the primary card once
@@ -251,6 +264,11 @@ Swagger UI (interactive docs) is at `http://localhost:8080/swagger/index.html`.
 | `POST` | `/v1/groups/:id/leader/authorize` | Leader pre-authorizes cover for the next 24 hours |
 | `DELETE` | `/v1/groups/:id/leader/authorize` | Leader revokes pre-authorization |
 | `GET` | `/v1/groups/:id/leader/authorize` | Get leader pre-authorization status |
+| `POST` | `/v1/groups/:id/receipts` | Start a receipt session for itemized splitting |
+| `GET` | `/v1/groups/:id/receipts/active` | Get the active receipt with all member assignments |
+| `PUT` | `/v1/groups/:id/receipts/:receiptId/assignments` | Member claims their items on the receipt |
+| `POST` | `/v1/groups/:id/receipts/:receiptId/finalize` | Leader locks in assignments (enables item-based JIT) |
+| `DELETE` | `/v1/groups/:id/receipts/:receiptId` | Cancel a draft receipt session |
 | `POST` | `/v1/cards/issue` | Issue a virtual card to a member (KYC required) |
 | `POST` | `/v1/auth/jit` | JIT authorization endpoint (called by card processor) |
 | `POST` | `/v1/webhooks/stripe/issuing-authorization` | Stripe Issuing authorization webhook |

@@ -180,6 +180,17 @@ func main() {
 		receiptGroup := api.Group("/receipts")
 		receiptGroup.Use(middleware.RateLimit(rdb, 10, time.Minute))
 		receiptGroup.POST("/parse", receiptHandler.ParseReceipt)
+
+		// ── Receipt sessions (persisted, itemized bill splitting) ─────────────
+		// These routes are under the group member middleware so membership is
+		// already verified. The :receiptId param routes sit alongside the
+		// group member routes so they inherit the same auth.
+		sessionHandler := receipts.NewSessionHandler(pool)
+		groupMember.POST("/receipts", sessionHandler.CreateReceipt)
+		groupMember.GET("/receipts/active", sessionHandler.GetActiveReceipt)
+		groupMember.PUT("/receipts/:receiptId/assignments", sessionHandler.UpsertAssignments)
+		groupMember.POST("/receipts/:receiptId/finalize", sessionHandler.FinalizeReceipt)
+		groupMember.DELETE("/receipts/:receiptId", sessionHandler.CancelReceipt)
 	}
 
 	// ── HTTP server with graceful shutdown ────────────────────────────────────

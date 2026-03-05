@@ -390,6 +390,212 @@ curl -s $BASE/v1/groups/$GROUP_ID/transactions | jq '.transactions[0]'
 
 ---
 
+## 16. Receipt Session Flow (Itemized Splitting)
+
+Receipt sessions let members claim specific line items before swiping, so each person is charged only for what they ordered.
+
+### Setup
+
+This section assumes you have completed steps 1–6 (user, group with two members, cards issued). You need `GROUP_ID`, `CREATOR_MEMBER_ID`, `MEMBER2_ID`, and `CARD_TOKEN` from those steps.
+
+### Step 1 — Parse and Upload a Receipt
+
+Use the existing receipt parser endpoint, then pass the parsed items to create a session:
+
+```bash
+# Parse receipt image (returns items array)
+PARSE_RESP=$(curl -s -X POST $BASE/v1/receipts/parse \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_base64": "<base64-encoded-receipt-image>"
+  }')
+
+echo $PARSE_RESP | jq .
+```
+
+Or skip parsing and POST a receipt manually with hardcoded items (e.g. a $100 dinner):
+
+```bash
+RECEIPT=$(curl -s -X POST $BASE/v1/groups/$GROUP_ID/receipts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "merchant_name": "The Steakhouse",
+    "total_cents": 10000,
+    "items": [
+      { "name": "Ribeye",       "quantity": 1, "unit_price_cents": 5500 },
+      { "name": "Salmon",       "quantity": 1, "unit_price_cents": 3200 },
+      { "name": "Shared fries", "quantity": 1, "unit_price_cents": 1300 }
+    ]
+  }')
+
+echo $RECEIPT | jq .
+RECEIPT_ID=$(echo $RECEIPT | jq -r '.receipt_id')
+```
+
+Expected (201 Created):
+```json
+{
+  "receipt_id": "<uuid>",
+  "status": "draft"
+}
+```
+
+### Step 2 — View Active Receipt
+
+Any group member can poll for the current draft session including all items and existing assignments:
+
+```bash
+curl -s $BASE/v1/groups/$GROUP_ID/receipts/active | jq .
+```
+
+Expected:
+```json
+{
+  "receipt_id": "<uuid>",
+  "merchant_name": "The Steakhouse",
+  "total_cents": 10000,
+  "status": "draft",
+  "items": [
+    { "item_id": "<uuid>", "name": "Ribeye",       "total_cents": 5500, "assignments": [] },
+    { "item_id": "<uuid>", "name": "Salmon",       "total_cents": 3200, "assignments": [] },
+    { "item_id": "<uuid>", "name": "Shared fries", "total_cents": 1300, "assignments": [] }
+  ]
+}
+```
+
+Note the item IDs — you'll need them for assignments.
+
+```bash
+RIBEYE_ID=$(curl -s $BASE/v1/groups/$GROUP_ID/receipts/active | jq -r '.items[0].item_id')
+SALMON_ID=$(curl -s $BASE/v1/groups/$GROUP_ID/receipts/active | jq -r '.items[1].item_id')
+FRIES_ID=$(curl -s  $BASE/v1/groups/$GROUP_ID/receipts/active | jq -r '.items[2].item_id')
+```
+
+### Step 3 — Members Claim Their Items
+
+Each member PUTs their full assignment list (replaces any previous assignments for that member):
+
+```bash
+# Creator claims the Ribeye ($55) and half the fries ($6.50 → 650 cents)
+curl -s -X PUT $BASE/v1/groups/$GROUP_ID/receipts/$RECEIPT_ID/assignments \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"assignments\": [
+      { \"item_id\": \"$RIBEYE_ID\", \"amount_cents\": 5500 },
+      { \"item_id\": \"$FRIES_ID\",  \"amount_cents\": 650 }
+    ]
+  }" | jq .
+
+# Member 2 claims the Salmon ($32) and the other half of fries ($6.50 → 650 cents)
+# (In dev, both users share DEV_USER_ID — use psql to insert the second assignment directly)
+curl -s -X PUT $BASE/v1/groups/$GROUP_ID/receipts/$RECEIPT_ID/assignments \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"assignments\": [
+      { \"item_id\": \"$SALMON_ID\", \"amount_cents\": 3200 },
+      { \"item_id\": \"$FRIES_ID\",  \"amount_cents\": 650 }
+    ]
+  }" | jq .
+```
+
+Expected (200 OK):
+```json
+{ "status": "ok" }
+```
+
+**Amount validation** — the server rejects amounts outside the floor/ceil for each item's proportional share. For example, claiming $0 for the Ribeye returns:
+```json
+{ "error": "amount_cents out of range for item", "min_allowed": 5500, "max_allowed": 5500, "got": 0 }
+```
+
+### Step 4 — Leader Finalizes the Receipt
+
+Only the group leader can finalize (caller must have `is_leader = true`):
+
+```bash
+# Make the creator the leader first if not already
+docker compose exec postgres psql -U tally -d tally -c \
+  "UPDATE members SET is_leader = true WHERE id = '$CREATOR_MEMBER_ID';"
+
+# Finalize
+curl -s -X POST $BASE/v1/groups/$GROUP_ID/receipts/$RECEIPT_ID/finalize | jq .
+```
+
+Expected (200 OK):
+```json
+{ "status": "finalized" }
+```
+
+A non-leader gets 403:
+```json
+{ "error": "leader access required" }
+```
+
+### Step 5 — JIT with Receipt (card swipe)
+
+Now trigger a JIT authorization. The handler will detect the finalized receipt and use item-based amounts:
+
+```bash
+WEBHOOK_SECRET="localtestingsecret"
+
+BODY=$(cat <<EOF
+{
+  "idempotency_key": "txn-receipt-001",
+  "card_token": "$CARD_TOKEN",
+  "amount_cents": 10000,
+  "currency": "usd",
+  "merchant_name": "The Steakhouse",
+  "merchant_category": "5812"
+}
+EOF
+)
+
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print "sha256="$2}')
+
+curl -s -X POST $BASE/v1/auth/jit \
+  -H "Content-Type: application/json" \
+  -H "X-Tally-Signature: $SIG" \
+  -H "Idempotency-Key: txn-receipt-001" \
+  -d "$BODY" | jq .
+```
+
+Expected (200 OK):
+```json
+{
+  "decision": "APPROVE",
+  "transaction_id": "<uuid>"
+}
+```
+
+The receipt is now consumed. Confirm by checking `receipts.transaction_id`:
+
+```bash
+docker compose exec postgres psql -U tally -d tally -c \
+  "SELECT id, status, transaction_id FROM receipts WHERE id = '$RECEIPT_ID';"
+```
+
+You should see `transaction_id` set to the transaction UUID.
+
+### Step 6 — Cancel a Receipt (Optional)
+
+Any member who created a receipt (or the leader) can cancel a draft before it is finalized:
+
+```bash
+curl -s -X DELETE $BASE/v1/groups/$GROUP_ID/receipts/$RECEIPT_ID | jq .
+```
+
+Expected (200 OK):
+```json
+{ "status": "deleted" }
+```
+
+Cancellation fails on a finalized or already-deleted receipt:
+```json
+{ "error": "receipt not found or already finalized" }
+```
+
+---
+
 ## Edge Cases
 
 | Scenario | Expected Status | Notes |
@@ -404,6 +610,12 @@ curl -s $BASE/v1/groups/$GROUP_ID/transactions | jq '.transactions[0]'
 | `POST /v1/auth/jit` unknown card token | 422 | `DECLINE` / `authorization_failed` |
 | `GET /v1/groups/:id` caller not a member | 403 | Group membership required |
 | `POST /v1/groups/:id/leader/authorize` caller not leader | 403 | Leader role required |
+| `POST /v1/groups/:id/receipts/:id/finalize` caller not leader | 403 | `leader access required` |
+| `DELETE /v1/groups/:id/receipts/:id` caller is non-leader non-creator | 403 | `not authorized to cancel this receipt` |
+| `PUT /v1/groups/:id/receipts/:id/assignments` amount out of floor/ceil range | 400 | `amount_cents out of range for item` |
+| `POST /v1/groups/:id/receipts` when a draft already exists | 200 | Existing draft auto-cancelled; new session created |
+| JIT swipe when receipt finalized but all assignments are 0 | APPROVE | Falls back to `split_weight` allocation |
+| JIT swipe with no finalized receipt | APPROVE | Standard `split_weight` allocation |
 
 ---
 
