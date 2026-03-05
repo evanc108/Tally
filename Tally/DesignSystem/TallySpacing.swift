@@ -16,13 +16,17 @@ enum TallySpacing {
     static let cardGap:       CGFloat = 12
 
     // ── Corners ───────────────────────────────────────────────────────────────
-    static let cardCornerRadius:   CGFloat = 4    // sharp containers (fintech ref)
-    static let cardInnerRadius:    CGFloat = 4    // sharp nested content
-    static let buttonCornerRadius: CGFloat = 0    // fully sharp rectangle buttons
+    static let cardCornerRadius:   CGFloat = 16   // modern rounded
+    static let cardInnerRadius:    CGFloat = 12   // nested content
+    static let buttonCornerRadius: CGFloat = 16   // soft rounded buttons
     static let chipCornerRadius:   CGFloat = 20   // capsule-like for pills/chips
 
     // ── Interactive elements ───────────────────────────────────────────────────
-    static let buttonHeight:      CGFloat = 56   // was 50
-    static let inputHeight:       CGFloat = 52   // text fields
+    static let buttonHeight:      CGFloat = 56
+    static let inputHeight:       CGFloat = 52
     static let listItemMinHeight: CGFloat = 60
+
+    // ── Action grid ──────────────────────────────────────────────────────────
+    static let actionIconSize:    CGFloat = 28
+    static let actionButtonSize:  CGFloat = 56
 }

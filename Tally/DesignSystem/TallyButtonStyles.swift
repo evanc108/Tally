@@ -12,7 +12,7 @@ struct TallyPrimaryButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity)
             .frame(height: TallySpacing.buttonHeight)
             .background(color)
-            .clipShape(Rectangle())
+            .clipShape(RoundedRectangle(cornerRadius: TallySpacing.buttonCornerRadius))
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
             .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
     }
@@ -28,7 +28,7 @@ struct TallyDarkButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity)
             .frame(height: TallySpacing.buttonHeight)
             .background(TallyColors.ink)
-            .clipShape(Rectangle())
+            .clipShape(RoundedRectangle(cornerRadius: TallySpacing.buttonCornerRadius))
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
             .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
     }
@@ -46,7 +46,7 @@ struct TallySecondaryButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity)
             .frame(height: TallySpacing.buttonHeight)
             .background(
-                Rectangle()
+                RoundedRectangle(cornerRadius: TallySpacing.buttonCornerRadius)
                     .stroke(color, lineWidth: 1.5)
             )
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)

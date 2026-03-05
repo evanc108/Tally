@@ -16,22 +16,27 @@ enum TallyColors {
     // Ink — near-black for dark buttons / heavy elements
     static let ink = Color(hex: 0x111111)
 
-    // Primary accent — green
-    static let accent = Color(hex: 0x30D158)
+    // Primary accent — sage green
+    static let accent     = Color(hex: 0x52B788)
+    static let accentDark = Color(hex: 0x3A8A63)   // gradient dark end
+
+    // Glass
+    static let glassBorder = Color.white.opacity(0.2)
+    static let glassShadow = Color.black.opacity(0.06)
 
     // Status
-    static let statusSuccess = Color(hex: 0x30D158)
+    static let statusSuccess = Color(hex: 0x52B788)
     static let statusAlert   = Color(hex: 0xFF453A)
     static let statusPending = Color(hex: 0xFFD60A)
     static let statusSocial  = Color(hex: 0xBF5AF2)
 
-    // Card palette — soft pastels for circle cards, category chips, etc.
-    static let cardMint    = Color(hex: 0xD4F5E2)
-    static let cardLavender = Color(hex: 0xE5D9F2)
-    static let cardPeach   = Color(hex: 0xFFE5D9)
-    static let cardCream   = Color(hex: 0xFFF3D9)
-    static let cardBlush   = Color(hex: 0xFFD9E5)
-    static let cardSky     = Color(hex: 0xD9EEFF)
+    // Card palette — saturated mid-tone pastels for circle cards
+    static let cardMint    = Color(hex: 0x8BD8AB)
+    static let cardLavender = Color(hex: 0xB8A4D8)
+    static let cardPeach   = Color(hex: 0xF0A889)
+    static let cardCream   = Color(hex: 0xE8C96A)
+    static let cardBlush   = Color(hex: 0xE894AB)
+    static let cardSky     = Color(hex: 0x7EB8E0)
 
     /// Cycles through the card palette by index (for deterministic circle colors).
     static let cardPalette: [Color] = [

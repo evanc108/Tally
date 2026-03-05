@@ -53,7 +53,7 @@ final class CirclesViewModel {
 
             // Merge with persisted local data (members, display name, split, leader)
             let persisted = CircleStore.loadAll()
-            circles = fetched.map { apiCircle in
+            circles = fetched.enumerated().map { index, apiCircle in
                 var circle = apiCircle
                 // First: merge from in-memory existing data (highest priority)
                 if let existing = circles.first(where: { $0.serverId == apiCircle.serverId }),
@@ -67,6 +67,13 @@ final class CirclesViewModel {
                 } else if let sid = apiCircle.serverId, let saved = persisted[sid] {
                     // Fallback: merge from disk persistence
                     saved.apply(to: &circle)
+                }
+                // TODO: Remove — placeholder activity for UI development
+                if circle.transactions.isEmpty {
+                    circle.transactions = Self.placeholderActivity(for: index)
+                }
+                if circle.walletBalance == 0 {
+                    circle.walletBalance = Self.placeholderBalances[index % Self.placeholderBalances.count]
                 }
                 return circle
             }
@@ -167,6 +174,21 @@ final class CirclesViewModel {
             }
         }
         circles.removeAll { $0.id == circle.id }
+    }
+
+    // MARK: - Placeholder Data (TODO: remove when real activity is wired up)
+
+    private static let placeholderBalances: [Double] = [320, 800, 250, 150, 475]
+
+    private static func placeholderActivity(for index: Int) -> [CircleTransaction] {
+        let sets: [[CircleTransaction]] = [
+            [CircleTransaction(title: "Groceries", amount: 86.40, paidBy: "Sarah", emoji: "🛒", status: .settled, date: .now.addingTimeInterval(-3600))],
+            [CircleTransaction(title: "Electric bill", amount: 142.00, paidBy: "You", emoji: "⚡", status: .pending, date: .now)],
+            [CircleTransaction(title: "Dinner", amount: 65.00, paidBy: "Alex", emoji: "🍽️", status: .settled, date: .now.addingTimeInterval(-7200))],
+            [CircleTransaction(title: "Uber", amount: 28.50, paidBy: "Jordan", emoji: "🚗", status: .pending, date: .now.addingTimeInterval(-1800))],
+            [CircleTransaction(title: "Netflix", amount: 22.99, paidBy: "You", emoji: "🎬", status: .settled, date: .now.addingTimeInterval(-86400))],
+        ]
+        return sets[index % sets.count]
     }
 
     // MARK: - Private
