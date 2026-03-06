@@ -239,6 +239,14 @@ func (h *StripeHandler) HandleReversal(c *gin.Context) {
 
 // HandleIdentity processes identity.verification_session.verified/failed events.
 func (h *StripeHandler) HandleIdentity(c *gin.Context) {
+	if h.cfg.StripeWebhookSecret == "" {
+		slog.Warn("identity webhook: STRIPE_WEBHOOK_SECRET not set")
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "identity webhook not configured",
+			"hint":  "set STRIPE_WEBHOOK_SECRET (e.g. from: stripe listen --forward-to localhost:8080/v1/webhooks/stripe/identity)",
+		})
+		return
+	}
 	event, ok := h.parseStripeEvent(c)
 	if !ok {
 		return

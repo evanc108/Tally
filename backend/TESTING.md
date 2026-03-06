@@ -27,6 +27,172 @@ With `CLERK_JWKS_URL` unset, all user-facing routes authenticate as `DEV_USER_ID
 
 ---
 
+## Testing with real Stripe (STRIPE_SECRET_KEY set)
+
+### Setup
+
+1. Add your test key to `.env`: `STRIPE_SECRET_KEY=sk_test_...`
+2. **Optional:** `STRIPE_ISSUING_CARD_PRODUCT=ic_...` (Stripe Dashboard → Issuing → Card designs). If unset, card issuance fails in real mode.
+3. **Optional:** `STRIPE_WEBHOOK_SECRET=whsec_...` to receive Stripe webhooks at `POST /v1/webhooks/stripe/*`.
+
+### Avoiding manual card approval (program setup)
+
+Stripe Issuing can put new cardholders in review (`requirements.past_due`) so you had to approve the card in the Dashboard. To avoid that:
+
+- **Backend:** The app sends the **individual** block when creating cardholders: `first_name`, `last_name`, and **`dob`** (required in the issue-card request, same as name — no default). That satisfies Stripe’s “Required before activating Cards” fields. For **Celtic-backed programs** (BIN sponsor Celtic), you must also collect and send **Authorized User Terms** acceptance: include `user_terms_accepted_at` (Unix timestamp when the user accepted terms in your UI). The backend sends that plus the request’s `ClientIP` and `User-Agent` to Stripe as `individual.card_issuing.user_terms_acceptance`.
+- **API:** `POST /v1/cards/issue` body must include `dob: { day, month, year }`. For Celtic, also include `user_terms_accepted_at` (Unix seconds). The server uses the request’s IP and User-Agent for Stripe.
+- **Dashboard:** There is no “skip cardholder review” switch. Sending full `individual` (name, DOB, and for Celtic, user terms acceptance) at cardholder creation is what keeps cards out of `past_due`.
+
+**Restart the backend and verify real Stripe is active:**
+
+```bash
+cd backend
+docker compose up -d --build
+docker compose logs app 2>&1 | grep -i stripe
+# Expect: "stripe real clients active" (or similar)
+```
+
+### Reference: curl / Postman commands
+
+Use `BASE=http://localhost:8080`. For JIT, set `WEBHOOK_SECRET` to match `.env` and use the signature helper from section 8.
+
+| Action | Method | URL | Body / Headers |
+|--------|--------|-----|----------------|
+| Create SetupIntent (get `client_secret`) | `POST` | `$BASE/v1/users/me/payment-method` | (no body) |
+| Confirm bank (link pm to member) | `POST` | `$BASE/v1/users/me/payment-method/confirm` | `{"member_id":"<member_id>","payment_method_id":"pm_xxx"}` |
+| Start KYC (get WebView URL) | `POST` | `$BASE/v1/users/me/kyc` | `{"member_id":"<member_id>"}` |
+| Issue card | `POST` | `$BASE/v1/cards/issue` | `{"member_id":"<member_id>","first_name":"Test","last_name":"User","email":"test@example.com","dob":{"day":15,"month":1,"year":1990},"user_terms_accepted_at":<unix_ts>}` (Celtic: include user_terms_accepted_at) |
+| JIT authorize | `POST` | `$BASE/v1/auth/jit` | Body: `{"idempotency_key":"...","card_token":"...","amount_cents":5000,"currency":"usd","merchant_name":"..."}`. Headers: `Content-Type: application/json`, `X-Tally-Signature: sha256=<HMAC of body>`, `Idempotency-Key: <same as in body>` |
+| Trigger settlement (dev) | `POST` | `$BASE/v1/dev/settle/<TXN_ID>` | (no body) |
+| Get transaction | `GET` | `$BASE/v1/groups/<GROUP_ID>/transactions/<TXN_ID>` | — |
+
+**Copy-paste curl examples (real Stripe):**
+
+```bash
+BASE=http://localhost:8080
+
+# 1) Create SetupIntent — use client_secret in Stripe.js or iOS to collect bank; then confirm with pm_xxx
+curl -s -X POST $BASE/v1/users/me/payment-method -H "Content-Type: application/json" | jq .
+
+# 2) Confirm payment method for a member (after completing SetupIntent; use real pm_xxx from Stripe)
+curl -s -X POST $BASE/v1/users/me/payment-method/confirm \
+  -H "Content-Type: application/json" \
+  -d '{"member_id":"<MEMBER_ID>","payment_method_id":"pm_xxxx"}' | jq .
+
+# 3) Start KYC — returns client_secret/URL for Stripe Identity WebView
+curl -s -X POST $BASE/v1/users/me/kyc \
+  -H "Content-Type: application/json" \
+  -d '{"member_id":"<MEMBER_ID>"}' | jq .
+
+# 4) Issue card (requires STRIPE_ISSUING_CARD_PRODUCT). dob required; user_terms_accepted_at required for Celtic programs.
+curl -s -X POST $BASE/v1/cards/issue \
+  -H "Content-Type: application/json" \
+  -d '{"member_id":"<MEMBER_ID>","first_name":"Test","last_name":"User","email":"test@example.com","dob":{"day":15,"month":1,"year":1990},"user_terms_accepted_at":'"$(date +%s)"'}' | jq .
+
+# 5) JIT — sign body with WEBHOOK_SECRET (see section 8 for sign_body helper)
+# BODY='{"idempotency_key":"jit-1","card_token":"<CARD_TOKEN>","amount_cents":5000,"currency":"usd","merchant_name":"Test"}'
+# SIG=$(sign_body "$BODY")
+# curl -s -X POST $BASE/v1/auth/jit -H "Content-Type: application/json" -H "X-Tally-Signature: $SIG" -H "Idempotency-Key: jit-1" -d "$BODY" | jq .
+
+# 6) Trigger settlement (dev only) then check transaction
+# curl -s -X POST $BASE/v1/dev/settle/<TXN_ID>
+# curl -s $BASE/v1/groups/<GROUP_ID>/transactions/<TXN_ID> | jq .
+```
+
+**Postman:** Use the table above: same URLs, `Content-Type: application/json`, and for JIT compute `X-Tally-Signature` as `sha256=<HMAC-SHA256(body, WEBHOOK_SECRET)>` (hex).
+
+### Full flow (real Stripe)
+
+| Step | What to do |
+|------|------------|
+| 1 | **Create a User** (section 2) |
+| 2 | **Create a Group** (section 3) — save `GROUP_ID`, `member_id` (creator) |
+| 3 | **Add More Members** (section 4) if needed; save `MEMBER2_ID` |
+| 4 | **ACH:** Run **1)** and **2)** above with a real bank (test: [Stripe test bank](https://docs.stripe.com/testing#ach-direct-debit)). Or shortcut: section 5 (psql `stripe_payment_method_id`, `kyc_status`). |
+| 5 | **KYC:** Run **3)** and complete in WebView; webhook sets `kyc_status`. Or shortcut: section 5. |
+| 6 | **Issue card:** Run **4)** (needs `STRIPE_ISSUING_CARD_PRODUCT`). |
+| 7 | **JIT:** Run **5)** (sign body; see section 8). |
+| 8 | Wait **35s** or run **6)**; then GET transaction — expect `status: "SETTLED"`, splits `"COMPLETED"`. Check Stripe Dashboard → Payments for ACH. |
+
+**Quick one-shot with real Stripe:** Use **Full Happy-Path** (section 15) or **$400 dinner** (section 16); for real ACH in section 16, use a real `pm_xxx` from one completed SetupIntent in the psql `UPDATE`.
+
+### Test ACH mandate + DOB/user terms (no Stripe dashboard)
+
+These curls verify that **user agreement** (ACH mandate) and **DOB + user terms** (card issuing) are sent correctly so you don’t have to fix things in the Stripe Dashboard.
+
+**Prereqs:** `STRIPE_SECRET_KEY=sk_test_...` in `.env`, backend running (`docker compose up -d`), `BASE=http://localhost:8080`.
+
+**1. Create user and group**
+
+```bash
+BASE=http://localhost:8080
+
+# Create user
+curl -s -X POST $BASE/v1/users/me \
+  -H "Content-Type: application/json" \
+  -d '{"clerk_user_id":"dev-user-local","email":"test@example.com","first_name":"Test","last_name":"User"}' | jq .
+
+# Create group (save member_id for next steps)
+GROUP=$(curl -s -X POST $BASE/v1/groups \
+  -H "Content-Type: application/json" \
+  -d '{"name":"ach-test-'$(date +%s)'","display_name":"ACH Test"}')
+echo "$GROUP" | jq .
+MEMBER_ID=$(echo "$GROUP" | jq -r '.member_id')
+echo "MEMBER_ID=$MEMBER_ID"
+```
+
+**2. ACH: SetupIntent + mandate (user agreement)**
+
+The mandate is the “user agreement” for ACH. Confirm the SetupIntent with Stripe **including mandate_data**; then attach the resulting PaymentMethod to your member via the app.
+
+```bash
+# Create SetupIntent (our API creates/uses Stripe Customer)
+SETI_RESP=$(curl -s -X POST $BASE/v1/users/me/payment-method -H "Content-Type: application/json")
+echo "$SETI_RESP" | jq .
+CLIENT_SECRET=$(echo "$SETI_RESP" | jq -r '.client_secret')
+SETI_ID="${CLIENT_SECRET%_secret_*}"
+if [ -z "$SETI_ID" ] || [ "$SETI_ID" = "null" ]; then echo "ERROR: no client_secret"; exit 1; fi
+
+# Confirm with Stripe (mandate = customer acceptance; use test bank)
+STRIPE_KEY=$(grep '^STRIPE_SECRET_KEY=' .env | cut -d= -f2)
+CONFIRM=$(curl -s "https://api.stripe.com/v1/setup_intents/$SETI_ID/confirm" \
+  -u "${STRIPE_KEY}:" \
+  -d payment_method=pm_usBankAccount_success \
+  -d "mandate_data[customer_acceptance][type]=online" \
+  -d "mandate_data[customer_acceptance][online][ip_address]=127.0.0.1" \
+  -d "mandate_data[customer_acceptance][online][user_agent]=curl")
+echo "$CONFIRM" | jq .
+PM_ID=$(echo "$CONFIRM" | jq -r '.payment_method')
+if [ -z "$PM_ID" ] || [ "$PM_ID" = "null" ]; then echo "ERROR: confirm failed"; exit 1; fi
+echo "PM_ID=$PM_ID"
+
+# Attach PM to member (our API)
+curl -s -X POST $BASE/v1/users/me/payment-method/confirm \
+  -H "Content-Type: application/json" \
+  -d "{\"member_id\":\"$MEMBER_ID\",\"payment_method_id\":\"$PM_ID\"}" | jq .
+# → {"status":"payment_method_attached"}
+```
+
+**3. DOB + user terms (issue card)**
+
+Card issuing requires KYC approved. Either complete KYC in the WebView (step 3 in “Copy-paste curl examples” above) or for a quick test set it in DB. Then issue the card **with `dob` and `user_terms_accepted_at`** so Stripe doesn’t put the cardholder in review.
+
+```bash
+# Optional: if you didn’t do KYC in browser, one-time DB shortcut for this member:
+# docker compose exec -T postgres psql -U tally -d tally -c \
+#   "UPDATE members SET kyc_status = 'approved' WHERE id = '$MEMBER_ID';"
+
+# Issue card (dob required; user_terms_accepted_at required for Celtic)
+curl -s -X POST $BASE/v1/cards/issue \
+  -H "Content-Type: application/json" \
+  -d '{"member_id":"'$MEMBER_ID'","first_name":"Test","last_name":"User","email":"test@example.com","dob":{"day":15,"month":1,"year":1990},"user_terms_accepted_at":'$(date +%s)'}' | jq .
+```
+
+- **ACH:** Mandate is set when you confirm the SetupIntent with `mandate_data[customer_acceptance]`; the app then stores the returned `payment_method_id` on the member. No dashboard change needed.
+- **Card:** Sending `dob` and `user_terms_accepted_at` (and the backend sending IP/User-Agent) satisfies Stripe so the cardholder isn’t stuck in `past_due`.
+
+---
+
 ## 1. Health Check
 
 ```bash
@@ -66,7 +232,7 @@ GROUP_ID=$(echo $GROUP | jq -r '.group_id')
 
 # The creator is automatically added as the first member.
 # The creator member_id is returned in the response.
-CREATOR_MEMBER_ID=$(echo $GROUP | jq -r '.creator_member_id')
+CREATOR_MEMBER_ID=$(echo $GROUP | jq -r '.member_id')
 ```
 
 ---
@@ -112,14 +278,16 @@ docker compose exec postgres psql -U tally -d tally -c "
 Each member gets their own unique card token (mock returns `card_mock_1`, `card_mock_2`, etc.).
 
 ```bash
-# Issue card to creator
+# Issue card to creator (dob required; user_terms_accepted_at for Celtic)
 CARD1=$(curl -s -X POST $BASE/v1/cards/issue \
   -H "Content-Type: application/json" \
   -d "{
     \"member_id\": \"$CREATOR_MEMBER_ID\",
     \"first_name\": \"Test\",
     \"last_name\": \"User\",
-    \"email\": \"test@example.com\"
+    \"email\": \"test@example.com\",
+    \"dob\": {\"day\": 15, \"month\": 1, \"year\": 1990},
+    \"user_terms_accepted_at\": $(date +%s)
   }")
 
 echo $CARD1 | jq .
@@ -132,7 +300,9 @@ CARD2=$(curl -s -X POST $BASE/v1/cards/issue \
     \"member_id\": \"$MEMBER2_ID\",
     \"first_name\": \"Friend\",
     \"last_name\": \"Smith\",
-    \"email\": \"friend@example.com\"
+    \"email\": \"friend@example.com\",
+    \"dob\": {\"day\": 20, \"month\": 6, \"year\": 1985},
+    \"user_terms_accepted_at\": $(date +%s)
   }")
 
 echo $CARD2 | jq .
@@ -141,7 +311,7 @@ CARD2_TOKEN=$(echo $CARD2 | jq -r '.card_token')
 
 ---
 
-## 7. Inspect Group State
+## 7. Inspect Group Statteste
 
 ```bash
 curl -s $BASE/v1/groups/$GROUP_ID | jq .
@@ -213,7 +383,7 @@ curl -s -X POST $BASE/v1/users/me/payment-method -H "Content-Type: application/j
 curl -s -X POST $BASE/v1/users/me/payment-method/confirm -H "Content-Type: application/json" -d "{\"member_id\":\"$MEMBER_ID\",\"payment_method_id\":\"pm_mock_primary\"}" > /dev/null
 docker compose -f backend/docker-compose.yml exec -T postgres psql -U tally -d tally -c "UPDATE members SET kyc_status = 'approved' WHERE id = '$MEMBER_ID';" > /dev/null 2>&1
 
-CARD=$(curl -s -X POST $BASE/v1/cards/issue -H "Content-Type: application/json" -d "{\"member_id\":\"$MEMBER_ID\",\"first_name\":\"Test\",\"last_name\":\"User\",\"email\":\"test@example.com\"}")
+CARD=$(curl -s -X POST $BASE/v1/cards/issue -H "Content-Type: application/json" -d "{\"member_id\":\"$MEMBER_ID\",\"first_name\":\"Test\",\"last_name\":\"User\",\"email\":\"test@example.com\",\"dob\":{\"day\":15,\"month\":1,\"year\":1990},\"user_terms_accepted_at\":$(date +%s)}")
 CARD_TOKEN=$(echo "$CARD" | jq -r '.card_token')
 
 IDEM_KEY="txn-$(date +%s)"
@@ -228,6 +398,7 @@ echo "GROUP_ID=$GROUP_ID TXN_ID=$TXN_ID"
 Then wait 35s and run: `curl -s $BASE/v1/groups/$GROUP_ID/transactions/$TXN_ID | jq .`
 
 Expected (200 OK):
+
 ```json
 {
   "decision": "APPROVE",
@@ -317,9 +488,9 @@ With mock Stripe, the “bank account” is `pm_mock_primary` (from payment-meth
 
 1. **Settlement ran** — `GET .../transactions/$TXN_ID` → `status` is `"SETTLED"` and every `splits[].status` is `"COMPLETED"`.
 2. **Right amounts per member** — Splits follow each member's `split_weight`. Single member: `splits[0].amount_cents` should equal the transaction `amount_cents`. Multiple members: sum of `splits[].amount_cents` must equal the transaction total, and each split = total × that member's split_weight (e.g. equal 4-way → 25% each).
-   ```bash
+  ```bash
    curl -s $BASE/v1/groups/$GROUP_ID/transactions/$TXN_ID | jq '{ total: .amount_cents, sum_splits: ([.splits[].amount_cents] | add), splits: [.splits[] | {display_name, amount_cents, status}] }'
-   ```
+  ```
    Check `sum_splits == total` and each split amount matches the expected share.
 3. **Real Stripe (test mode)** — With `STRIPE_SECRET_KEY` set and a real linked bank account (ACH), after settlement check Stripe Dashboard → Payments (or `stripe payment_intents list`); the charged amount should match that member's split for that transaction.
 4. **DB (optional)** — Query `funding_pulls` and `journal_entries` to confirm amounts in SQL.
@@ -392,26 +563,73 @@ curl -s -X POST $BASE/v1/users/me/payment-method/backup/confirm \
 
 ---
 
-## 14. KYC Flow (with real Stripe)
+## 14. Setting up KYC (Stripe Identity)
 
-> Requires `STRIPE_SECRET_KEY` to be set in `.env`. Skip for mock mode — use the psql shortcut in Step 5 instead.
+KYC uses Stripe Identity. The backend already exposes `POST /v1/users/me/kyc` and `POST /v1/webhooks/stripe/identity`; you only need to configure Stripe and env.
+
+### 14.1 Environment
+
+- **`STRIPE_SECRET_KEY`** — Required for creating verification sessions. Same key as Issuing/Payments.
+- **`STRIPE_WEBHOOK_SECRET`** — Required for the Identity webhook. If unset, the identity webhook returns 503 with a hint.
+
+### 14.2 Local development (Stripe CLI)
+
+1. Install Stripe CLI and log in: `brew install stripe/stripe-cli/stripe` then `stripe login`.
+2. Start your backend (e.g. `docker compose up`).
+3. In another terminal, run:
+   ```bash
+   cd backend && ./scripts/stripe_listen_identity.sh
+   ```
+4. Copy the **signing secret** (`whsec_...`) from the script output into `.env`:
+   ```bash
+   STRIPE_WEBHOOK_SECRET=whsec_...
+   ```
+5. Restart the backend so it picks up the new secret.
+6. When a user completes verification in the browser, Stripe will send events to your local server and the backend will set `kyc_status` to `approved` or `rejected`.
+
+### 14.3 Deployed / staging
+
+1. Stripe Dashboard → **Developers** → **Webhooks** → **Add endpoint**.
+2. **Endpoint URL:** `https://your-api-host/v1/webhooks/stripe/identity`.
+3. **Events:** `identity.verification_session.verified`, `identity.verification_session.requires_input`.
+4. Copy the **Signing secret** into your env as `STRIPE_WEBHOOK_SECRET`.
+
+### 14.4 Client flow
+
+1. **Start KYC:** `POST /v1/users/me/kyc` with `{"member_id": "<member_id>"}`. Response includes `session_id` and `url`.
+2. **Open URL** in a WebView (or browser). The user completes Stripe’s document verification.
+3. **Result:** Stripe sends a webhook to your backend; the backend updates `members.kyc_status` to `approved` or `rejected`. Your app can poll the member (e.g. `GET /v1/groups/:id/members`) or refresh state to see the new status.
+
+### 14.5 curl + WebView test
 
 ```bash
-# Step 1: Create Identity verification session — returns URL for iOS WebView
+BASE=http://localhost:8080
+MEMBER_ID=<your_member_id>
+
+# Create verification session (returns URL to open)
 curl -s -X POST $BASE/v1/users/me/kyc \
   -H "Content-Type: application/json" \
-  -d '{"member_id": "<member_id>"}' | jq .
+  -d "{\"member_id\": \"$MEMBER_ID\"}" | jq .
 
-# Step 2: User completes identity check in iOS WebView
+# Open the "url" from the response in a browser; complete verification.
+# Then Stripe sends identity.verification_session.verified to POST /v1/webhooks/stripe/identity
+# and the backend sets kyc_status = 'approved' for that member.
+```
 
-# Step 3: Stripe sends identity.verification_session.verified webhook to:
-# POST /v1/webhooks/stripe/identity
-# This updates kyc_status to 'approved' automatically
+### 14.6 Dev shortcut (skip real verification)
+
+To test card issuance without running Identity, set KYC in the DB:
+
+```bash
+docker compose exec -T postgres psql -U tally -d tally -c \
+  "UPDATE members SET kyc_status = 'approved' WHERE id = '<MEMBER_ID>';"
 ```
 
 ---
 
 ## 15. Full Happy-Path (End-to-End)
+
+**Mock mode only.** Uses `pm_mock` and does not call real Stripe. With `STRIPE_SECRET_KEY` set, card issue would require `STRIPE_ISSUING_CARD_PRODUCT` and settlement would fail (Stripe rejects `pm_mock`). For real Stripe sandbox, use the flow in **Testing with real Stripe** (payment-method + confirm for a real `pm_xxx`, then issue + JIT + settle), or section 16 with a real `pm_xxx` in the psql step.
 
 ```bash
 BASE=http://localhost:8080
@@ -430,7 +648,7 @@ GROUP_RESP=$(curl -s -X POST $BASE/v1/groups \
   -H "Content-Type: application/json" \
   -d '{"name":"e2e-test","display_name":"E2E Test"}')
 GROUP_ID=$(echo $GROUP_RESP | jq -r '.group_id')
-MEMBER_ID=$(echo $GROUP_RESP | jq -r '.creator_member_id')
+MEMBER_ID=$(echo $GROUP_RESP | jq -r '.member_id')
 
 # 4. Set up member (kyc + payment method via psql shortcut)
 docker compose exec postgres psql -U tally -d tally -c \
@@ -439,7 +657,7 @@ docker compose exec postgres psql -U tally -d tally -c \
 # 5. Issue card
 CARD_RESP=$(curl -s -X POST $BASE/v1/cards/issue \
   -H "Content-Type: application/json" \
-  -d "{\"member_id\":\"$MEMBER_ID\",\"first_name\":\"Test\",\"last_name\":\"User\",\"email\":\"test@example.com\"}")
+  -d "{\"member_id\":\"$MEMBER_ID\",\"first_name\":\"Test\",\"last_name\":\"User\",\"email\":\"test@example.com\",\"dob\":{\"day\":15,\"month\":1,\"year\":1990},\"user_terms_accepted_at\":$(date +%s)}")
 CARD_TOKEN=$(echo $CARD_RESP | jq -r '.card_token')
 
 # 6. Authorize a purchase
@@ -532,7 +750,9 @@ CARD=$(curl -s -X POST $BASE/v1/cards/issue \
     \"member_id\": \"$PAYER_MEMBER_ID\",
     \"first_name\": \"Test\",
     \"last_name\": \"User\",
-    \"email\": \"test@example.com\"
+    \"email\": \"test@example.com\",
+    \"dob\": {\"day\": 15, \"month\": 1, \"year\": 1990},
+    \"user_terms_accepted_at\": $(date +%s)
   }")
 echo "$CARD" | jq .
 CARD_TOKEN=$(echo "$CARD" | jq -r '.card_token')
@@ -780,6 +1000,131 @@ Cancellation fails on a finalized or already-deleted receipt:
 
 ---
 
+## 17. Real Stripe full flow (Customer + ACH settlement)
+
+End-to-end test with **real Stripe**: SetupIntent uses a Stripe Customer (so the PaymentMethod can be charged at settlement). Run from **backend** directory with stack up (`docker compose up -d`), `STRIPE_SECRET_KEY` and `STRIPE_ISSUING_CARD_PRODUCT` set in `.env`. Use a **new** bank link (old `pm_xxx` from before the Customer change are not attached to a Customer and will fail at settlement).
+
+**0. Env and helpers (run once, same shell for all steps)**
+
+```bash
+cd backend
+BASE=http://localhost:8080
+export WEBHOOK_SECRET=$(grep '^WEBHOOK_SECRET=' .env | cut -d= -f2)
+sign_body() { printf '%s' "$1" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print "sha256="$2}'; }
+```
+
+**1. Create user**
+
+```bash
+curl -s -X POST $BASE/v1/users/me \
+  -H "Content-Type: application/json" \
+  -d '{"clerk_user_id":"dev-user-local","email":"test@example.com","first_name":"Test","last_name":"User"}' | jq .
+```
+
+**2. Create group**
+
+```bash
+GROUP=$(curl -s -X POST $BASE/v1/groups \
+  -H "Content-Type: application/json" \
+  -d '{"name": "dinner-test", "display_name": "Dinner Test"}')
+echo "$GROUP" | jq .
+GROUP_ID=$(echo "$GROUP" | jq -r '.group_id')
+PAYER_MEMBER_ID=$(echo "$GROUP" | jq -r '.member_id')
+```
+
+**3. Add second member (50/50)**
+
+```bash
+docker compose exec -T postgres psql -U tally -d tally -c \
+  "UPDATE members SET split_weight = 0.5 WHERE group_id = '$GROUP_ID' AND is_leader = true;"
+
+MEMBER2=$(curl -s -X POST $BASE/v1/groups/$GROUP_ID/members \
+  -H "Content-Type: application/json" \
+  -d '{"display_name": "Friend", "split_weight": 0.5, "user_id": "dev-user-2"}')
+echo "$MEMBER2" | jq .
+```
+
+**4. Create SetupIntent (creates/uses Stripe Customer) and get client_secret**
+
+```bash
+SETI_RESP=$(curl -s -X POST $BASE/v1/users/me/payment-method -H "Content-Type: application/json")
+echo "$SETI_RESP" | jq .
+CLIENT_SECRET=$(echo "$SETI_RESP" | jq -r '.client_secret')
+# Extract SetupIntent ID (part before _secret_)
+SETI_ID="${CLIENT_SECRET%_secret_*}"
+echo "SETI_ID=$SETI_ID"
+```
+
+**5. Confirm SetupIntent with Stripe (test ACH + mandate)**
+
+```bash
+STRIPE_KEY=$(grep '^STRIPE_SECRET_KEY=' .env | cut -d= -f2)
+CONFIRM=$(curl -s "https://api.stripe.com/v1/setup_intents/$SETI_ID/confirm" \
+  -u "${STRIPE_KEY}:" \
+  -d payment_method=pm_usBankAccount_success \
+  -d "mandate_data[customer_acceptance][type]=online" \
+  -d "mandate_data[customer_acceptance][online][ip_address]=127.0.0.1" \
+  -d "mandate_data[customer_acceptance][online][user_agent]=curl")
+echo "$CONFIRM" | jq .
+PM_ID=$(echo "$CONFIRM" | jq -r '.payment_method')
+echo "PM_ID=$PM_ID"
+```
+
+If `PM_ID` is null, the confirm failed; check the response for `error.message`.
+
+**6. Confirm payment method for payer and set KYC + ACH for both members**
+
+```bash
+curl -s -X POST $BASE/v1/users/me/payment-method/confirm \
+  -H "Content-Type: application/json" \
+  -d "{\"member_id\": \"$PAYER_MEMBER_ID\", \"payment_method_id\": \"$PM_ID\"}" | jq .
+
+docker compose exec -T postgres psql -U tally -d tally -c "
+  UPDATE members
+  SET kyc_status = 'approved',
+      stripe_payment_method_id = '$PM_ID',
+      stripe_backup_payment_method_id = '$PM_ID'
+  WHERE group_id = '$GROUP_ID';"
+```
+
+**7. Issue card**
+
+```bash
+CARD=$(curl -s -X POST $BASE/v1/cards/issue \
+  -H "Content-Type: application/json" \
+  -d "{\"member_id\": \"$PAYER_MEMBER_ID\", \"first_name\": \"Test\", \"last_name\": \"User\", \"email\": \"test@example.com\", \"dob\": {\"day\": 15, \"month\": 1, \"year\": 1990}, \"user_terms_accepted_at\": $(date +%s)}")
+echo "$CARD" | jq .
+CARD_TOKEN=$(echo "$CARD" | jq -r '.card_token')
+```
+
+If you get "card issuer unavailable", check `docker compose logs app` for Stripe errors; you may need to fix cardholder requirements in Stripe Dashboard and retry (or use a new group so a new cardholder is created after fixing program requirements). For Celtic programs, `user_terms_accepted_at` (Unix timestamp when user accepted terms) is required.
+
+**8. JIT (authorize $400)**
+
+```bash
+IDEM_KEY="dinner-400-$(date +%s)"
+BODY="{\"idempotency_key\":\"$IDEM_KEY\",\"card_token\":\"$CARD_TOKEN\",\"amount_cents\":40000,\"currency\":\"usd\",\"merchant_name\":\"Dinner Spot\",\"merchant_category\":\"5812\"}"
+SIG=$(sign_body "$BODY")
+JIT=$(curl -s -X POST $BASE/v1/auth/jit \
+  -H "Content-Type: application/json" \
+  -H "X-Tally-Signature: $SIG" \
+  -H "Idempotency-Key: $IDEM_KEY" \
+  -d "$BODY")
+echo "$JIT" | jq .
+TXN_ID=$(echo "$JIT" | jq -r '.transaction_id')
+```
+
+**9. Settle and verify**
+
+```bash
+curl -s -w "\nHTTP %{http_code}" -X POST "$BASE/v1/dev/settle/$TXN_ID"
+curl -s $BASE/v1/groups/$GROUP_ID/transactions/$TXN_ID | jq '{ status, amount_cents, splits: [.splits[] | { display_name, amount_cents, status }] }'
+```
+
+Expected: `status` `"SETTLED"`, two splits each `20000` and `status` `"COMPLETED"`. In Stripe Dashboard → Payments you should see two ACH charges of $200.
+
+---
+
 ## Edge Cases
 
 | Scenario | Expected Status | Notes |
@@ -810,3 +1155,4 @@ Interactive API documentation with all endpoints and schemas:
 ```
 http://localhost:8080/swagger/index.html
 ```
+
