@@ -26,6 +26,10 @@ func (m *MockClient) CreateCardholder(_ context.Context, req CreateCardholderReq
 	return fmt.Sprintf("ich_mock_%s_%d", req.ExternalID[:8], n), nil
 }
 
+func (m *MockClient) FindCardholderByMemberID(_ context.Context, _ string) (string, error) {
+	return "", nil // mock never reuses
+}
+
 func (m *MockClient) IssueCard(_ context.Context, cardholderID, _ string) (string, string, error) {
 	cardID := fmt.Sprintf("ic_mock_%s", uuid.New().String()[:8])
 	return cardID, cardID, nil

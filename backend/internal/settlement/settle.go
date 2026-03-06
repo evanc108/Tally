@@ -44,6 +44,7 @@ type memberFunding struct {
 	AmountCents                 int64
 	Currency                    string
 	FundingType                 string
+	StripeCustomerID            string // user's Stripe Customer (required for off-session ACH)
 	StripePaymentMethodID       string
 	StripeBackupPaymentMethodID string
 }
@@ -51,6 +52,7 @@ type memberFunding struct {
 // leaderInfo holds the group leader's payment details for cover logic.
 type leaderInfo struct {
 	MemberID              uuid.UUID
+	StripeCustomerID      string
 	StripePaymentMethodID string
 	AuthorizedAt          time.Time
 }
@@ -80,17 +82,19 @@ func SettleApprovedTransaction(ctx context.Context, db *sql.DB, stripe stripepay
 		return nil
 	}
 
-	// Load pending funding pulls with member payment method info.
+	// Load pending funding pulls with member payment method and user's Stripe Customer (for off-session ACH).
 	rows, err := db.QueryContext(ctx, `
 		SELECT
 			fp.member_id,
 			ma.id                                                    AS account_id,
 			fp.amount_cents,
 			fp.funding_type,
+			COALESCE(u.stripe_customer_id, '')                       AS stripe_customer_id,
 			COALESCE(m.stripe_payment_method_id,        '')          AS pm_id,
 			COALESCE(m.stripe_backup_payment_method_id, '')          AS backup_pm_id
 		FROM funding_pulls fp
 		JOIN members m  ON m.id  = fp.member_id
+		JOIN users u    ON u.id  = m.user_id
 		JOIN accounts ma ON ma.owner_id = fp.member_id AND ma.account_type = 'asset'
 		WHERE fp.transaction_id = $1 AND fp.status = 'PENDING'`,
 		txnID,
@@ -106,7 +110,7 @@ func SettleApprovedTransaction(ctx context.Context, db *sql.DB, stripe stripepay
 		mf.Currency = currency
 		if err := rows.Scan(
 			&mf.MemberID, &mf.AccountID, &mf.AmountCents, &mf.FundingType,
-			&mf.StripePaymentMethodID, &mf.StripeBackupPaymentMethodID,
+			&mf.StripeCustomerID, &mf.StripePaymentMethodID, &mf.StripeBackupPaymentMethodID,
 		); err != nil {
 			return fmt.Errorf("scan funding pull: %w", err)
 		}
@@ -123,18 +127,20 @@ func SettleApprovedTransaction(ctx context.Context, db *sql.DB, stripe stripepay
 	// Load leader info for potential cover.
 	var leader *leaderInfo
 	var lMemberID uuid.UUID
-	var lPMID string
+	var lCustID, lPMID string
 	var lAuthAt sql.NullTime
 	err = db.QueryRowContext(ctx, `
-		SELECT id, COALESCE(stripe_payment_method_id, ''), leader_pre_authorized_at
-		FROM members
-		WHERE group_id = $1 AND is_leader = true AND leader_pre_authorized = true
+		SELECT m.id, COALESCE(u.stripe_customer_id, ''), COALESCE(m.stripe_payment_method_id, ''), m.leader_pre_authorized_at
+		FROM members m
+		JOIN users u ON u.id = m.user_id
+		WHERE m.group_id = $1 AND m.is_leader = true AND m.leader_pre_authorized = true
 		LIMIT 1`,
 		groupID,
-	).Scan(&lMemberID, &lPMID, &lAuthAt)
+	).Scan(&lMemberID, &lCustID, &lPMID, &lAuthAt)
 	if err == nil && lAuthAt.Valid && time.Since(lAuthAt.Time) <= leaderAuthWindow && lPMID != "" {
 		leader = &leaderInfo{
 			MemberID:              lMemberID,
+			StripeCustomerID:      lCustID,
 			StripePaymentMethodID: lPMID,
 			AuthorizedAt:          lAuthAt.Time,
 		}
@@ -224,14 +230,14 @@ func settleOneMember(
 
 	// Attempt primary PM.
 	if mf.StripePaymentMethodID != "" {
-		if _, err := stripe.ChargePaymentMethod(ctx, mf.StripePaymentMethodID, mf.AmountCents, mf.Currency, idempKey+"_primary"); err == nil {
+		if _, err := stripe.ChargePaymentMethod(ctx, mf.StripeCustomerID, mf.StripePaymentMethodID, mf.AmountCents, mf.Currency, idempKey+"_primary"); err == nil {
 			markFundingPull(ctx, db, mf.MemberID, txnID, "direct_pull", "COMPLETED")
 			return true, "direct_pull", nil
 		}
 		slog.Warn("primary PM charge failed, retrying", "member_id", mf.MemberID, "transaction_id", txnID)
 
 		// Retry primary once.
-		if _, err := stripe.ChargePaymentMethod(ctx, mf.StripePaymentMethodID, mf.AmountCents, mf.Currency, idempKey+"_primary_retry"); err == nil {
+		if _, err := stripe.ChargePaymentMethod(ctx, mf.StripeCustomerID, mf.StripePaymentMethodID, mf.AmountCents, mf.Currency, idempKey+"_primary_retry"); err == nil {
 			markFundingPull(ctx, db, mf.MemberID, txnID, "direct_pull", "COMPLETED")
 			return true, "direct_pull", nil
 		}
@@ -240,7 +246,7 @@ func settleOneMember(
 
 	// Attempt backup PM.
 	if mf.StripeBackupPaymentMethodID != "" {
-		if _, err := stripe.ChargePaymentMethod(ctx, mf.StripeBackupPaymentMethodID, mf.AmountCents, mf.Currency, idempKey+"_backup"); err == nil {
+		if _, err := stripe.ChargePaymentMethod(ctx, mf.StripeCustomerID, mf.StripeBackupPaymentMethodID, mf.AmountCents, mf.Currency, idempKey+"_backup"); err == nil {
 			markFundingPull(ctx, db, mf.MemberID, txnID, "direct_pull", "COMPLETED")
 			return true, "direct_pull", nil
 		}
@@ -250,7 +256,7 @@ func settleOneMember(
 	// Leader cover: charge leader's card and create IOU.
 	if leader != nil && leader.MemberID != mf.MemberID {
 		leaderIdempKey := fmt.Sprintf("settle_%s_%s_leader_cover", txnID, mf.MemberID)
-		if _, err := stripe.ChargePaymentMethod(ctx, leader.StripePaymentMethodID, mf.AmountCents, mf.Currency, leaderIdempKey); err == nil {
+		if _, err := stripe.ChargePaymentMethod(ctx, leader.StripeCustomerID, leader.StripePaymentMethodID, mf.AmountCents, mf.Currency, leaderIdempKey); err == nil {
 			markFundingPull(ctx, db, mf.MemberID, txnID, "leader_overwrite", "COMPLETED")
 			slog.Info("leader_cover_applied",
 				"debtor_member_id", mf.MemberID,

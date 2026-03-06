@@ -79,11 +79,44 @@ func (h *Handler) CreateSetupIntent(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
 		return
 	}
-	id, _ := raw.(string)
+	userID, _ := raw.(string)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
+		return
+	}
 
-	clientSecret, err := h.payment.CreateSetupIntent(c.Request.Context(), id)
+	// Get or create Stripe Customer for this user so the SetupIntent attaches the
+	// PaymentMethod to a Customer (required for later off-session ACH charges at settlement).
+	var stripeCustomerID sql.NullString
+	err := h.db.QueryRowContext(c.Request.Context(), `SELECT stripe_customer_id FROM users WHERE id = $1`, userID).Scan(&stripeCustomerID)
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "CreateSetupIntent failed", "user_id", id, "error", err)
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+		slog.ErrorContext(c.Request.Context(), "CreateSetupIntent user lookup failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+		return
+	}
+	customerID := stripeCustomerID.String
+	if !stripeCustomerID.Valid || customerID == "" {
+		customerID, err = h.payment.CreateCustomer(c.Request.Context(), userID)
+		if err != nil {
+			slog.ErrorContext(c.Request.Context(), "CreateCustomer failed", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "stripe error"})
+			return
+		}
+		_, err = h.db.ExecContext(c.Request.Context(), `UPDATE users SET stripe_customer_id = $1, updated_at = NOW() WHERE id = $2`, customerID, userID)
+		if err != nil {
+			slog.ErrorContext(c.Request.Context(), "CreateSetupIntent save customer id failed", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
+			return
+		}
+	}
+
+	clientSecret, err := h.payment.CreateSetupIntent(c.Request.Context(), customerID)
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "CreateSetupIntent failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "stripe error"})
 		return
 	}
@@ -142,11 +175,11 @@ func (h *Handler) CreateBackupSetupIntent(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_user_identity"})
 		return
 	}
-	id, _ := raw.(string)
+	_, _ = raw.(string)
 
-	clientSecret, err := h.payment.CreateSetupIntent(c.Request.Context(), id)
+	clientSecret, err := h.payment.CreateSetupIntent(c.Request.Context(), "")
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "CreateBackupSetupIntent failed", "user_id", id, "error", err)
+		slog.ErrorContext(c.Request.Context(), "CreateBackupSetupIntent failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "stripe error"})
 		return
 	}
