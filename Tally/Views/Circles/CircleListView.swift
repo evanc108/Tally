@@ -17,7 +17,7 @@ struct CircleListView: View {
         ZStack(alignment: .top) {
             // ── Scrollable cards ─────────────────────────────
             ScrollView {
-                LazyVStack(spacing: TallySpacing.xl) {
+                LazyVStack(spacing: TallySpacing.md) {
                     ForEach(Array(filteredCircles.enumerated()), id: \.element.id) { index, circle in
                         NavigationLink(value: circle) {
                             CircleCard(circle: circle, index: index)
@@ -100,97 +100,85 @@ private struct CircleCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // ── Zone 1: Header ───────────────────────────────
-            HStack(alignment: .top, spacing: TallySpacing.md) {
-                circleImage
+        HStack(spacing: 0) {
+            // Accent strip
+            cardColor
+                .frame(width: 15)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline) {
+            // Card content
+            VStack(alignment: .leading, spacing: 0) {
+                // Header: name + circle icon
+                HStack(alignment: .top, spacing: TallySpacing.md) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(circle.name)
-                            .font(TallyFont.bodySemibold)
+                            .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(TallyColors.textPrimary)
                             .lineLimit(1)
 
-                        Spacer()
+                        // Card number or member info
+                        if let lastFour = circle.myCardLastFour {
+                            HStack(spacing: 5) {
+                                Image(systemName: "creditcard")
+                                    .font(.system(size: 11))
+                                Text("•••• \(lastFour)")
+                                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                            }
+                            .foregroundStyle(TallyColors.textSecondary)
+                        } else {
+                            Text("\(circle.memberCount) members")
+                                .font(TallyFont.caption)
+                                .foregroundStyle(TallyColors.textSecondary)
+                        }
+                    }
 
+                    Spacer()
+
+                    circleImage
+                }
+                .padding(.bottom, TallySpacing.lg)
+
+                // Balance row
+                HStack(alignment: .bottom) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Balance")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(TallyColors.textSecondary)
                         Text(formattedBalance)
-                            .font(TallyFont.title)
+                            .font(.system(size: 26, weight: .bold, design: .rounded))
                             .foregroundStyle(TallyColors.textPrimary)
                     }
 
-                    // Activity subtitle or placeholder
-                    if let tx = latestTransaction {
-                        HStack(spacing: 5) {
-                            Text(tx.emoji)
-                                .font(.system(size: 13))
-                            Text(tx.title)
-                                .font(TallyFont.caption)
-                                .foregroundStyle(TallyColors.textSecondary)
-                                .lineLimit(1)
-                            Circle()
-                                .fill(tx.status.color)
-                                .frame(width: 5, height: 5)
-                            Text(tx.status.label)
+                    Spacer()
+
+                    // Activity + members
+                    VStack(alignment: .trailing, spacing: 6) {
+                        memberAvatarRow
+
+                        if let tx = latestTransaction {
+                            HStack(spacing: 4) {
+                                Text(tx.emoji)
+                                    .font(.system(size: 11))
+                                Circle()
+                                    .fill(tx.status.color)
+                                    .frame(width: 5, height: 5)
+                                Text(tx.status.label)
+                                    .font(TallyFont.smallLabel)
+                                    .foregroundStyle(tx.status.color)
+                            }
+                        } else {
+                            Text("No activity")
                                 .font(TallyFont.smallLabel)
-                                .foregroundStyle(tx.status.color)
+                                .foregroundStyle(TallyColors.textTertiary)
                         }
-                    } else {
-                        Text("No activity yet")
-                            .font(TallyFont.caption)
-                            .foregroundStyle(TallyColors.textTertiary)
                     }
                 }
             }
-            .padding(.horizontal, TallySpacing.cardPadding)
-            .padding(.top, TallySpacing.lg)
-            .padding(.bottom, TallySpacing.md)
-
-            // ── Zone 2: Tinted divider ───────────────────────
-            cardColor.opacity(0.20)
-                .frame(height: 1)
-                .padding(.horizontal, TallySpacing.md)
-
-            // ── Zone 3: Footer ───────────────────────────────
-            HStack(alignment: .center) {
-                // Virtual card number
-                if let lastFour = circle.myCardLastFour {
-                    HStack(spacing: 4) {
-                        Image(systemName: "creditcard")
-                            .font(.system(size: 11))
-                            .foregroundStyle(TallyColors.textSecondary)
-                        Text("•••• \(lastFour)")
-                            .font(.system(size: 13, weight: .medium, design: .monospaced))
-                            .foregroundStyle(TallyColors.textSecondary)
-                    }
-                } else {
-                    HStack(spacing: 4) {
-                        Image(systemName: "creditcard")
-                            .font(.system(size: 11))
-                            .foregroundStyle(TallyColors.textTertiary)
-                        Text("No card linked")
-                            .font(TallyFont.caption)
-                            .foregroundStyle(TallyColors.textTertiary)
-                    }
-                }
-
-                Spacer(minLength: TallySpacing.sm)
-
-                // Member avatars + count
-                VStack(alignment: .trailing, spacing: 3) {
-                    memberAvatarRow
-                    Text("\(circle.memberCount) members")
-                        .font(TallyFont.smallLabel)
-                        .foregroundStyle(TallyColors.textTertiary)
-                }
-            }
-            .padding(.horizontal, TallySpacing.cardPadding)
-            .padding(.top, TallySpacing.md)
-            .padding(.bottom, TallySpacing.lg)
+            .padding(TallySpacing.lg)
         }
         .background(TallyColors.bgPrimary)
-        .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
-        .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+        .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
     }
 
     // MARK: - Circle Image
@@ -201,13 +189,13 @@ private struct CircleCard: View {
             Image(uiImage: photo)
                 .resizable()
                 .scaledToFill()
-                .frame(width: 48, height: 48)
-                .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardInnerRadius))
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
         } else {
             Text(String(circle.name.prefix(1)).uppercased())
-                .font(.system(size: 20, weight: .bold))
+                .font(.system(size: 17, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 48, height: 48)
+                .frame(width: 40, height: 40)
                 .background(
                     LinearGradient(
                         colors: [cardColor, cardColor.opacity(0.7)],
@@ -215,14 +203,14 @@ private struct CircleCard: View {
                         endPoint: .bottomTrailing
                     )
                 )
-                .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardInnerRadius))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
         }
     }
 
     // MARK: - Balance
 
     private var formattedBalance: String {
-        String(format: "$%.0f", circle.walletBalance)
+        String(format: "$%.2f", circle.walletBalance)
     }
 
     // MARK: - Member Avatars
