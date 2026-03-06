@@ -80,6 +80,9 @@ struct LoginView: View {
                 }
             }
             .padding(.horizontal, TallySpacing.screenPadding)
+            .onSubmit {
+                logIn()
+            }
 
             Spacer()
 
@@ -113,6 +116,8 @@ struct LoginView: View {
                 )
                 if signIn.status == .complete {
                     authManager.completeAuth()
+                } else if signIn.status == .needsSecondFactor {
+                    authManager.requireTwoFactor(signIn: signIn)
                 }
             } catch {
                 errorMessage = error.localizedDescription
