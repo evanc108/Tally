@@ -9,8 +9,8 @@ enum TallyColors {
 
     // Backgrounds
     static let bgPrimary   = Color(hex: 0xFFFFFF)  // "White"
-    static let bgSecondary = Color(hex: 0xF7F8FA)  // "Background"
-    static let bgSurface   = Color(hex: 0xF7F8FA)  // alias for bgSecondary
+    static let bgSecondary = Color(hex: 0xFCFCFD)  // "Background"
+    static let bgSurface   = Color(hex: 0xFCFCFD)  // alias for bgSecondary
 
     static let white  = Color(hex: 0xFFFFFF)
     static let divider = Color(hex: 0xE0E4E8)       // "Border"
@@ -59,17 +59,17 @@ enum TallyColors {
     static let slateHint     = Color(hex: 0xC0C4C8)
     static let slateHintDark = Color(hex: 0x8D9297)
 
-    // Card palette — soft pastels for circle cards, category chips, etc.
-    static let cardMint    = Color(hex: 0xD8F3DC)  // Frosted Mint
-    static let cardLavender = Color(hex: 0xE5D9F2)
-    static let cardPeach   = Color(hex: 0xFFE5D9)
-    static let cardCream   = Color(hex: 0xFFF8E0)  // Pending Yellow bg
-    static let cardBlush   = Color(hex: 0xFFF0EF)  // Declined Red bg
-    static let cardSky     = Color(hex: 0xEFF6FF)  // Processing Blue bg
+    // Card palette — rich accent colors for circle card strips
+    static let cardMint    = Color(hex: 0x52B788)  // Teal green
+    static let cardLavender = Color(hex: 0x7C5CBF)  // Deep purple
+    static let cardPeach   = Color(hex: 0xE8785A)  // Warm coral
+    static let cardCream   = Color(hex: 0xD4A843)  // Goldenrod
+    static let cardBlush   = Color(hex: 0xD94F6B)  // Rose
+    static let cardSky     = Color(hex: 0x3A8FD6)  // Ocean blue
 
     /// Cycles through the card palette by index (for deterministic circle colors).
     static let cardPalette: [Color] = [
-        cardMint, cardLavender, cardPeach, cardCream, cardBlush, cardSky
+        cardLavender, cardSky, cardMint, cardPeach, cardBlush, cardCream
     ]
 
     static func cardColor(for index: Int) -> Color {

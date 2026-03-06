@@ -1,0 +1,20 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Xcode: Build & Run",
+      "type": "shell",
+      "command": "xcodebuild build -scheme Tally -destination 'id=76E28FFB-15E3-440B-8E28-BA8430063D44' -quiet && xcrun simctl install 76E28FFB-15E3-440B-8E28-BA8430063D44 ~/Library/Developer/Xcode/DerivedData/Tally-gwkyjcgfsljiquehaygpffrtaioo/Build/Products/Debug-iphonesimulator/Tally.app && xcrun simctl terminate 76E28FFB-15E3-440B-8E28-BA8430063D44 com.tallyapp.ios 2>/dev/null; xcrun simctl launch 76E28FFB-15E3-440B-8E28-BA8430063D44 com.tallyapp.ios",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}

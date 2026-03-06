@@ -58,48 +58,142 @@ enum TallyTab: Int, CaseIterable {
 struct ContentView: View {
     @Environment(Clerk.self) private var clerk
     @State private var selectedTab: TallyTab = .home
-    @State private var previousTab: TallyTab = .home
     @State private var circlesViewModel = CirclesViewModel()
     @State private var showPayFlow = false
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            Tab("Home", systemImage: "house", value: .home) {
-                HomeTab(circles: circlesViewModel.circles)
+        ZStack(alignment: .bottom) {
+            // Tab content
+            Group {
+                switch selectedTab {
+                case .home:
+                    NavigationStack {
+                        HomeTab(circles: circlesViewModel.circles)
+                            .toolbar(.hidden, for: .navigationBar)
+                    }
+                case .circles:
+                    CirclesTab(viewModel: circlesViewModel)
+                case .pay:
+                    EmptyView()
+                case .wallet:
+                    WalletTab()
+                case .profile:
+                    ProfileTab()
+                }
             }
-            Tab("Circles", systemImage: "person.3", value: .circles) {
-                CirclesTab(viewModel: circlesViewModel)
-            }
-            Tab(value: .pay) {
-                EmptyView()
-            } label: {
-                Label("Pay", systemImage: "dollarsign.circle.fill")
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, TallyColors.accent)
-            }
-            Tab("Wallet", systemImage: "wallet.bifold", value: .wallet) {
-                WalletTab()
-            }
-            Tab("Profile", systemImage: "person", value: .profile) {
-                ProfileTab()
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Custom liquid glass tab bar
+            TallyTabBar(selectedTab: $selectedTab, onPayTap: {
+                showPayFlow = true
+            })
         }
-        .tint(.black)
+        .ignoresSafeArea(.keyboard)
         .task {
             await circlesViewModel.fetchCircles()
-        }
-        .onChange(of: selectedTab) { oldTab, newTab in
-            if newTab == .pay {
-                showPayFlow = true
-                selectedTab = oldTab
-            } else {
-                previousTab = newTab
-            }
         }
         .fullScreenCover(isPresented: $showPayFlow, onDismiss: {
             Task { await circlesViewModel.fetchCircles(force: true) }
         }) {
             PayFlowView(availableCircles: circlesViewModel.circles)
+        }
+    }
+
+}
+
+// MARK: - Custom Liquid Glass Tab Bar
+
+private struct TallyTabBar: View {
+    @Binding var selectedTab: TallyTab
+    @Environment(Clerk.self) private var clerk
+    var onPayTap: () -> Void
+
+    private var userInitials: String {
+        let first = clerk.user?.firstName?.prefix(1) ?? ""
+        let last = clerk.user?.lastName?.prefix(1) ?? ""
+        let result = "\(first)\(last)"
+        return result.isEmpty ? "T" : result.uppercased()
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Home
+            tabButton(for: .home)
+            // Circles
+            tabButton(for: .circles)
+            // Pay — green circle, no label
+            Button {
+                onPayTap()
+            } label: {
+                Image(systemName: "dollarsign")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(TallyColors.accent)
+                    .clipShape(Circle())
+            }
+            .frame(maxWidth: .infinity)
+            // Wallet
+            tabButton(for: .wallet)
+            // Profile — user initials or image
+            Button {
+                withAnimation(.snappy(duration: 0.25)) {
+                    selectedTab = .profile
+                }
+            } label: {
+                VStack(spacing: 4) {
+                    Text(userInitials)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(selectedTab == .profile ? .white : TallyColors.textSecondary)
+                        .frame(width: 28, height: 28)
+                        .background(selectedTab == .profile ? TallyColors.accent : TallyColors.textSecondary.opacity(0.2))
+                        .clipShape(Circle())
+                    Text("Profile")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(selectedTab == .profile ? TallyColors.textPrimary : TallyColors.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, TallySpacing.xs)
+                .padding(.horizontal, 4)
+                .background {
+                    if selectedTab == .profile {
+                        Capsule()
+                            .fill(.regularMaterial)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, TallySpacing.sm)
+        .padding(.vertical, TallySpacing.xs)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .padding(.horizontal, TallySpacing.screenPadding)
+        .padding(.bottom, TallySpacing.xs)
+    }
+
+    private func tabButton(for tab: TallyTab) -> some View {
+        Button {
+            withAnimation(.snappy(duration: 0.25)) {
+                selectedTab = tab
+            }
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: selectedTab == tab ? tab.activeIcon : tab.icon)
+                    .font(.system(size: 20, weight: .medium))
+                Text(tab.title)
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(selectedTab == tab ? TallyColors.textPrimary : TallyColors.textSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, TallySpacing.xs)
+            .padding(.horizontal, 4)
+            .background {
+                if selectedTab == tab {
+                    Capsule()
+                        .fill(.regularMaterial)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
         }
     }
 }
@@ -177,40 +271,61 @@ private struct HomeTab: View {
     /// Hardcoded total balance for UI testing.
     private var totalBalance: String { "$1,000.00" }
 
-    /// Header opacity: fully visible until 60pt scroll, fades out by 140pt
+    /// Header opacity: starts fading at 40pt, gone by 120pt
     private var headerOpacity: Double {
-        let fadeStart: CGFloat = 60
-        let fadeEnd: CGFloat = 140
+        let fadeStart: CGFloat = 40
+        let fadeEnd: CGFloat = 120
         if scrollOffset <= fadeStart { return 1 }
         if scrollOffset >= fadeEnd { return 0 }
         return Double(1 - (scrollOffset - fadeStart) / (fadeEnd - fadeStart))
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                topBar
-                balanceRow
-                if !circles.isEmpty { circleCarousel }
-                transactionsHeader
-                transactionsList
-            }
-            .padding(.bottom, TallySpacing.lg)
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: ScrollOffsetKey.self,
-                        value: -geo.frame(in: .named("homeScroll")).minY
-                    )
+        ZStack(alignment: .top) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear.frame(height: 56)
+                    balanceRow
+                    if !circles.isEmpty { circleCarousel }
+                    transactionsHeader
+                    transactionsList
                 }
-            )
+            }
+            .contentMargins(.bottom, 100, for: .scrollContent)
+            .onScrollGeometryChange(for: CGFloat.self) { geo in
+                geo.contentOffset.y
+            } action: { _, newValue in
+                scrollOffset = newValue
+            }
+
+            // Floating header overlay
+            topBar
+                .allowsHitTesting(headerOpacity > 0.1)
         }
-        .coordinateSpace(name: "homeScroll")
-        .onPreferenceChange(ScrollOffsetKey.self) { scrollOffset = $0 }
-        .background(TallyColors.bgPrimary)
+        .background(
+            ZStack {
+                Color.white
+                VStack {
+                    Spacer()
+                    LinearGradient(
+                        stops: [
+                            .init(color: TallyColors.accent.opacity(0), location: 0),
+                            .init(color: TallyColors.accent.opacity(0.02), location: 0.25),
+                            .init(color: TallyColors.accent.opacity(0.06), location: 0.5),
+                            .init(color: TallyColors.accent.opacity(0.12), location: 0.75),
+                            .init(color: TallyColors.accent.opacity(0.18), location: 1.0),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .containerRelativeFrame(.vertical) { h, _ in h * 0.9 }
+                }
+            }
+            .ignoresSafeArea()
+        )
     }
 
-    // MARK: - Top Bar (scrolls with content, fades on deep scroll)
+    // MARK: - Top Bar (floating, fades on deep scroll)
 
     private var topBar: some View {
         ZStack {
@@ -221,7 +336,7 @@ private struct HomeTab: View {
             HStack {
                 Spacer()
                 Button {} label: {
-                    Image(systemName: "bell.fill")
+                    Image(systemName: "bell")
                         .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(TallyColors.textPrimary)
                         .frame(width: 44, height: 44)
@@ -231,6 +346,20 @@ private struct HomeTab: View {
         }
         .padding(.horizontal, TallySpacing.screenPadding)
         .padding(.top, TallySpacing.sm)
+        .padding(.bottom, TallySpacing.sm)
+        .frame(maxWidth: .infinity)
+        .background(
+            LinearGradient(
+                stops: [
+                    .init(color: Color.white.opacity(0.9), location: 0),
+                    .init(color: Color.white.opacity(0.6), location: 0.35),
+                    .init(color: Color.white.opacity(0.2), location: 0.7),
+                    .init(color: Color.white.opacity(0), location: 1.0),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
         .opacity(headerOpacity)
     }
 
@@ -250,10 +379,10 @@ private struct HomeTab: View {
 
             Spacer()
 
-            // Right: compact pill buttons
-            HStack(spacing: TallySpacing.sm) {
-                quickActionPill(icon: "plus", label: "Add")
-                quickActionPill(icon: "arrow.up.right", label: "Send")
+            // Right: circular liquid glass black buttons
+            HStack(spacing: TallySpacing.md) {
+                quickActionCircle(icon: "plus")
+                quickActionCircle(icon: "arrow.up.right")
             }
         }
         .padding(.horizontal, TallySpacing.screenPadding)
@@ -261,18 +390,16 @@ private struct HomeTab: View {
         .padding(.bottom, TallySpacing.xxxl)
     }
 
-    private func quickActionPill(icon: String, label: String) -> some View {
-        HStack(spacing: 4) {
+    private func quickActionCircle(icon: String) -> some View {
+        Button {} label: {
             Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
-            Text(label)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(Color.black)
+                .clipShape(Circle())
+                .glassEffect(.regular.interactive(), in: Circle())
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 14)
-        .frame(height: 36)
-        .background(TallyColors.accent)
-        .clipShape(Capsule())
     }
 
     // MARK: - Circle Carousel
@@ -280,9 +407,10 @@ private struct HomeTab: View {
     private var circleCarousel: some View {
         VStack(alignment: .leading, spacing: TallySpacing.sm) {
             HStack {
-                Text("Your Circles")
-                    .font(TallyFont.bodySemibold)
+                Text("YOUR CIRCLES")
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(TallyColors.textSecondary)
+                    .tracking(0.5)
                 Spacer()
                 Button {} label: {
                     HStack(spacing: 4) {
@@ -312,9 +440,10 @@ private struct HomeTab: View {
 
     private var transactionsHeader: some View {
         HStack {
-            Text("Transactions")
-                .font(TallyFont.bodySemibold)
+            Text("TRANSACTIONS")
+                .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(TallyColors.textSecondary)
+                .tracking(0.5)
             Spacer()
             Button {} label: {
                 HStack(spacing: TallySpacing.xs) {
@@ -338,17 +467,28 @@ private struct HomeTab: View {
             } else {
                 ForEach(groupedItems, id: \.label) { group in
                     Text(group.label)
-                        .font(TallyFont.caption)
+                        .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(TallyColors.textSecondary)
+                        .tracking(0.3)
                         .padding(.horizontal, TallySpacing.screenPadding)
                         .padding(.top, TallySpacing.lg)
                         .padding(.bottom, TallySpacing.sm)
 
-                    VStack(spacing: TallySpacing.sm) {
-                        ForEach(group.items) { item in
+                    // Elevated card container for the group
+                    VStack(spacing: 0) {
+                        ForEach(Array(group.items.enumerated()), id: \.element.id) { index, item in
                             ActivityRowView(item: item)
+                            if index < group.items.count - 1 {
+                                Divider()
+                                    .foregroundStyle(TallyColors.borderLight)
+                                    .padding(.leading, 72) // align with text after icon
+                            }
                         }
                     }
+                    .background(TallyColors.bgPrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+                    .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
                     .padding(.horizontal, TallySpacing.screenPadding)
                 }
             }
@@ -433,7 +573,7 @@ private struct MiniTallyCard: View {
             RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius)
                 .strokeBorder(Color.white.opacity(0.2), lineWidth: 0.5)
         )
-        .shadow(color: TallyColors.hunterGreen.opacity(0.3), radius: 16, y: 8)
+        .shadow(color: TallyColors.hunterGreen.opacity(0.15), radius: 6, y: 3)
     }
 }
 
@@ -458,12 +598,11 @@ private struct ActivityRowView: View {
             Spacer()
 
             Text(item.formattedAmount)
-                .font(TallyFont.amounts)
+                .font(.system(size: 17, weight: .bold, design: .rounded))
                 .foregroundStyle(item.isCredit ? TallyColors.statusSuccess : TallyColors.textPrimary)
         }
         .padding(.horizontal, TallySpacing.lg)
         .padding(.vertical, TallySpacing.md)
-        .liquidGlass(in: RoundedRectangle(cornerRadius: TallySpacing.cardInnerRadius))
     }
 }
 
