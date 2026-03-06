@@ -44,7 +44,7 @@ struct AuthPrimaryButtonStyle: ButtonStyle {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 52)
             .background(isEnabled ? TallyColors.accent : TallyColors.accent.opacity(0.4))
-            .clipShape(RoundedRectangle(cornerRadius: TallyRadius.xl))
+            .clipShape(Rectangle())
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
     }
@@ -56,13 +56,13 @@ struct AuthDivider: View {
     var body: some View {
         HStack(spacing: TallySpacing.md) {
             Rectangle()
-                .fill(TallyColors.border)
+                .fill(TallyColors.divider)
                 .frame(height: 1)
             Text("or")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(TallyColors.textTertiary)
             Rectangle()
-                .fill(TallyColors.border)
+                .fill(TallyColors.divider)
                 .frame(height: 1)
         }
     }
@@ -93,7 +93,9 @@ struct SocialAuthButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            action()
+        } label: {
             HStack(spacing: TallySpacing.xs) {
                 Image(systemName: provider.iconName)
                     .font(.system(size: 18))
@@ -104,11 +106,11 @@ struct SocialAuthButton: View {
                     .foregroundStyle(TallyColors.textPrimary)
             }
             .frame(maxWidth: .infinity, minHeight: 52)
-            .background(TallyColors.white)
-            .clipShape(RoundedRectangle(cornerRadius: TallyRadius.xl))
+            .background(TallyColors.bgPrimary)
+            .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
             .overlay(
-                RoundedRectangle(cornerRadius: TallyRadius.xl)
-                    .stroke(TallyColors.border, lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius)
+                    .stroke(TallyColors.divider, lineWidth: 1.5)
             )
         }
     }
@@ -124,7 +126,7 @@ struct AuthFooterLink: View {
     var body: some View {
         HStack(spacing: 4) {
             Text(text)
-                .font(TallyFont.small)
+                .font(TallyFont.caption)
                 .foregroundStyle(TallyColors.textSecondary)
             Button(action) {
                 onTap()

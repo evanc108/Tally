@@ -1,3 +1,4 @@
+import ClerkKit
 import Foundation
 
 @Observable
@@ -7,6 +8,11 @@ final class CirclesViewModel {
     var isLoading = false
     var error: TallyError?
     private var hasFetched = false
+
+    /// Hardcoded starting balance per circle for UI testing.
+    /// Backend tally_balance_cents starts at 0 and goes negative on spend,
+    /// so this offset makes the displayed balance = startingBalance + delta.
+    static let startingBalance: Double = 100
 
     private static let deletedKey = "tally.deletedCircleIDs"
 
@@ -30,8 +36,9 @@ final class CirclesViewModel {
 
     // MARK: - Fetch
 
-    func fetchCircles() async {
-        // Allow first fetch to populate; subsequent calls refresh in-place
+    func fetchCircles(force: Bool = false) async {
+        // Skip if already fetched — callers pass force: true to refresh
+        if hasFetched && !force { return }
         let isFirstFetch = !hasFetched
         hasFetched = true
         isLoading = true
@@ -52,7 +59,7 @@ final class CirclesViewModel {
 
             // Merge with persisted local data (members, display name, split, leader)
             let persisted = CircleStore.loadAll()
-            circles = fetched.map { apiCircle in
+            circles = fetched.enumerated().map { index, apiCircle in
                 var circle = apiCircle
                 // First: merge from in-memory existing data (highest priority)
                 if let existing = circles.first(where: { $0.serverId == apiCircle.serverId }),
@@ -66,6 +73,10 @@ final class CirclesViewModel {
                 } else if let sid = apiCircle.serverId, let saved = persisted[sid] {
                     // Fallback: merge from disk persistence
                     saved.apply(to: &circle)
+                }
+                // Default wallet balance for UI testing
+                if circle.walletBalance == 0 {
+                    circle.walletBalance = Self.startingBalance
                 }
                 return circle
             }
@@ -89,10 +100,22 @@ final class CirclesViewModel {
             .lowercased()
             .replacingOccurrences(of: " ", with: "-")
 
+        // Build member list from the local state (excludes the creator — backend adds them automatically).
+        let totalPeople = Double(state.members.count + 1) // +1 for the creator
+        let memberDTOs = state.members.map { member in
+            CreateGroupMemberDTO(
+                displayName: member.name,
+                splitWeight: member.splitPercentage > 0
+                    ? member.splitPercentage / 100.0
+                    : 1.0 / totalPeople
+            )
+        }
+
         let req = CreateCircleRequestDTO(
             name: slug,
             displayName: state.circleName,
-            currency: "USD"
+            currency: "USD",
+            members: memberDTOs
         )
         let response: CreateCircleResponseDTO = try await APIClient.shared.post(
             path: "/v1/groups",
@@ -156,9 +179,52 @@ final class CirclesViewModel {
         circles.removeAll { $0.id == circle.id }
     }
 
+    // MARK: - Circle Detail (transactions + balance)
+
+    /// Fetches transactions and member balances for a specific circle from the backend.
+    /// Updates the circle in-place with real data.
+    func fetchCircleDetail(for circle: TallyCircle) async {
+        guard let serverId = circle.serverId else { return }
+
+        // Fetch transactions and group detail in parallel
+        async let txnTask: ListTransactionsResponseDTO? = {
+            try? await APIClient.shared.get(path: "/v1/groups/\(serverId)/transactions")
+        }()
+        async let detailTask: GroupDetailResponseDTO? = {
+            try? await APIClient.shared.get(path: "/v1/groups/\(serverId)")
+        }()
+
+        let txnResponse = await txnTask
+        let detailResponse = await detailTask
+
+        guard let idx = circles.firstIndex(where: { $0.id == circle.id }) else { return }
+
+        // Map backend transactions → CircleTransaction
+        if let txns = txnResponse?.transactions {
+            circles[idx].transactions = txns.map { CircleTransaction(from: $0) }
+        }
+
+        // Compute wallet balance: starting balance + backend delta.
+        // tally_balance_cents starts at 0 and goes negative as members spend,
+        // so we add it to the hardcoded starting balance for consistency.
+        if let members = detailResponse?.members {
+            let deltaCents = members.reduce(Int64(0)) { $0 + $1.tallyBalanceCents }
+            circles[idx].walletBalance = Self.startingBalance + Double(deltaCents) / 100.0
+        }
+    }
+
+    /// Refreshes a circle by serverId — called after payment completes.
+    func refreshCircle(serverId: String) async {
+        guard let circle = circles.first(where: { $0.serverId == serverId }) else { return }
+        await fetchCircleDetail(for: circle)
+    }
+
     // MARK: - Private
 
     private func ensureUser() async throws {
-        let _: MeResponseDTO = try await APIClient.shared.post(path: "/v1/users/me")
+        let first = Clerk.shared.user?.firstName ?? ""
+        let last = Clerk.shared.user?.lastName ?? ""
+        let body = ["first_name": first, "last_name": last]
+        let _: MeResponseDTO = try await APIClient.shared.post(path: "/v1/users/me", body: body)
     }
 }

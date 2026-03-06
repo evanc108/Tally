@@ -35,7 +35,7 @@ struct AuthFlowView: View {
             .offset(y: appeared ? 0 : 20)
             .opacity(appeared ? 1 : 0)
         }
-        .background(TallyColors.white)
+        .background(TallyColors.bgPrimary)
         .onAppear {
             appeared = false
             withAnimation(.easeOut(duration: 0.35).delay(0.05)) {

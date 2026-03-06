@@ -194,7 +194,7 @@ struct SplitMethodView: View {
 
 // MARK: - Percentage Row
 
-private struct PercentageRow: View {
+struct PercentageRow: View {
     let name: String
     let color: Color
     let percentage: Double
@@ -216,7 +216,7 @@ private struct PercentageRow: View {
 
             // Slider
             Slider(
-                value: Binding(get: { percentage }, set: { onChange($0) }),
+                value: Binding(get: { percentage }, set: { onChange($0.rounded()) }),
                 in: 0...100,
                 step: 1
             )

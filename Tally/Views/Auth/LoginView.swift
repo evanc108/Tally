@@ -47,7 +47,7 @@ struct LoginView: View {
                 // Error
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(TallyFont.small)
+                        .font(TallyFont.caption)
                         .foregroundStyle(TallyColors.statusAlert)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -94,7 +94,7 @@ struct LoginView: View {
             }
             .padding(.bottom, TallySpacing.xl)
         }
-        .background(TallyColors.white)
+        .background(TallyColors.bgPrimary)
         .animation(.spring(duration: 0.3), value: errorMessage)
     }
 

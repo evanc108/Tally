@@ -1,4 +1,0 @@
-Pasta  14.99
-Wine  8.00
-Dessert  7.50
-Total  30.49
