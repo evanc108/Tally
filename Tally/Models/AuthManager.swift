@@ -1,4 +1,5 @@
 import SwiftUI
+import ClerkKit
 
 @Observable
 final class AuthManager {
@@ -7,6 +8,7 @@ final class AuthManager {
         case onboarding
         case authenticating
         case verifyingEmail
+        case verifyingTwoFactor
         case verifyingIdentity
         case authenticated
     }
@@ -19,6 +21,7 @@ final class AuthManager {
     private(set) var state: State = .welcome
     var authMode: AuthMode = .signUp
     var pendingEmail: String?
+    var pendingSignIn: SignIn?
 
     func showOnboarding() {
         state = .onboarding
@@ -34,21 +37,29 @@ final class AuthManager {
         state = .verifyingEmail
     }
 
+    func requireTwoFactor(signIn: SignIn) {
+        pendingSignIn = signIn
+        state = .verifyingTwoFactor
+    }
+
     func requireIdentityVerification() {
         state = .verifyingIdentity
     }
 
     func completeAuth() {
+        pendingSignIn = nil
         state = .authenticated
     }
 
     func signOut() {
         state = .welcome
         pendingEmail = nil
+        pendingSignIn = nil
     }
 
     func backToWelcome() {
         state = .welcome
         pendingEmail = nil
+        pendingSignIn = nil
     }
 }

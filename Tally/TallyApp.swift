@@ -57,6 +57,13 @@ struct RootView: View {
                         removal: .move(edge: .leading)
                     ))
                     .zIndex(3)
+            case .verifyingTwoFactor:
+                TwoFactorView()
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing),
+                        removal: .move(edge: .leading)
+                    ))
+                    .zIndex(3)
             case .verifyingIdentity:
                 IdentityVerificationFlowView()
                     .transition(.asymmetric(
@@ -85,6 +92,8 @@ struct RootView: View {
                 switch authManager.state {
                 case .verifyingEmail:
                     authManager.requireIdentityVerification()
+                case .verifyingTwoFactor:
+                    authManager.completeAuth()
                 case .authenticating:
                     // Returning user (OAuth or password login) — go straight to app
                     authManager.completeAuth()

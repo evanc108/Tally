@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/stripe/stripe-go/v82"
+	"github.com/stripe/stripe-go/v82/customer"
 	"github.com/stripe/stripe-go/v82/paymentintent"
 	"github.com/stripe/stripe-go/v82/paymentmethod"
 	"github.com/stripe/stripe-go/v82/setupintent"
@@ -18,13 +19,19 @@ import (
 // PaymentClient abstracts Stripe payment operations so handlers can be tested
 // without real Stripe credentials.
 type PaymentClient interface {
+	// CreateCustomer creates a Stripe Customer for the given user (metadata tally_user_id).
+	// Used so SetupIntent can attach the PaymentMethod to a Customer for later off-session charges.
+	CreateCustomer(ctx context.Context, userID string) (customerID string, err error)
+
 	// CreateSetupIntent creates a Stripe SetupIntent for attaching a US bank
 	// account (ACH Direct Debit). Returns the client_secret the client uses to complete the flow.
+	// customerID must be set so the confirmed PaymentMethod is attached to that Customer.
 	CreateSetupIntent(ctx context.Context, customerID string) (clientSecret string, err error)
 
 	// ChargePaymentMethod charges an existing PaymentMethod (us_bank_account) via ACH.
+	// customerID is required for off-session ACH (the PaymentMethod must be attached to this Customer).
 	// The idempotencyKey is passed as the Stripe idempotency key header to prevent double charges.
-	ChargePaymentMethod(ctx context.Context, pmID string, amountCents int64, currency, idempotencyKey string) (chargeID string, err error)
+	ChargePaymentMethod(ctx context.Context, customerID, pmID string, amountCents int64, currency, idempotencyKey string) (chargeID string, err error)
 
 	// RetrievePaymentMethod verifies that a PaymentMethod exists in Stripe.
 	// Returns an error if the PM is not found or otherwise invalid.
@@ -42,6 +49,18 @@ type realClient struct{}
 func NewRealClient(secretKey string) PaymentClient {
 	stripe.Key = secretKey
 	return &realClient{}
+}
+
+func (c *realClient) CreateCustomer(ctx context.Context, userID string) (string, error) {
+	params := &stripe.CustomerParams{
+		Metadata: map[string]string{"tally_user_id": userID},
+	}
+	params.Context = ctx
+	cust, err := customer.New(params)
+	if err != nil {
+		return "", fmt.Errorf("stripe CreateCustomer: %w", err)
+	}
+	return cust.ID, nil
 }
 
 func (c *realClient) CreateSetupIntent(ctx context.Context, customerID string) (string, error) {
@@ -62,7 +81,7 @@ func (c *realClient) CreateSetupIntent(ctx context.Context, customerID string) (
 	return si.ClientSecret, nil
 }
 
-func (c *realClient) ChargePaymentMethod(ctx context.Context, pmID string, amountCents int64, currency, idempotencyKey string) (string, error) {
+func (c *realClient) ChargePaymentMethod(ctx context.Context, customerID, pmID string, amountCents int64, currency, idempotencyKey string) (string, error) {
 	params := &stripe.PaymentIntentParams{
 		Amount:             stripe.Int64(amountCents),
 		Currency:           stripe.String(currency),
@@ -70,6 +89,9 @@ func (c *realClient) ChargePaymentMethod(ctx context.Context, pmID string, amoun
 		PaymentMethodTypes: stripe.StringSlice([]string{"us_bank_account"}),
 		Confirm:            stripe.Bool(true),
 		OffSession:         stripe.Bool(true),
+	}
+	if customerID != "" {
+		params.Customer = stripe.String(customerID)
 	}
 	params.Context = ctx
 	params.SetIdempotencyKey(idempotencyKey)
@@ -101,12 +123,21 @@ func NewMockClient() PaymentClient {
 	return &mockClient{}
 }
 
+func (m *mockClient) CreateCustomer(_ context.Context, userID string) (string, error) {
+	n := m.counter.Add(1)
+	prefix := userID
+	if len(prefix) > 8 {
+		prefix = prefix[:8]
+	}
+	return fmt.Sprintf("cus_mock_%s_%d", prefix, n), nil
+}
+
 func (m *mockClient) CreateSetupIntent(_ context.Context, _ string) (string, error) {
 	n := m.counter.Add(1)
 	return fmt.Sprintf("seti_mock_%d_secret_mock", n), nil
 }
 
-func (m *mockClient) ChargePaymentMethod(_ context.Context, pmID string, amountCents int64, _, _ string) (string, error) {
+func (m *mockClient) ChargePaymentMethod(_ context.Context, _, pmID string, amountCents int64, _, _ string) (string, error) {
 	n := m.counter.Add(1)
 	return fmt.Sprintf("pi_mock_%s_%d_%d", pmID, amountCents, n), nil
 }

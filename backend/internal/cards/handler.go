@@ -18,6 +18,15 @@ import (
 
 const issueCardTimeout = 15 * time.Second
 
+// cardIssuerErrorResponse returns a 502 body. In non-production, includes "detail" with the underlying error.
+func cardIssuerErrorResponse(err error, env string) gin.H {
+	resp := gin.H{"error": "card issuer unavailable"}
+	if env != "production" && err != nil {
+		resp["detail"] = err.Error()
+	}
+	return resp
+}
+
 // Handler handles card-issuing routes.
 type Handler struct {
 	db      *sql.DB
@@ -43,11 +52,18 @@ type issueCardRequest struct {
 	FirstName    string `json:"first_name"    binding:"required"`
 	LastName     string `json:"last_name"     binding:"required"`
 	Email        string `json:"email"         binding:"required"`
-	AddressLine1 string `json:"address_line1"`
-	City         string `json:"city"`
-	State        string `json:"state"`
-	PostalCode   string `json:"postal_code"`
-	Country      string `json:"country"`
+	DOB          *struct {
+		Day   int `json:"day"   binding:"required,min=1,max=31"`
+		Month int `json:"month" binding:"required,min=1,max=12"`
+		Year  int `json:"year"  binding:"required,min=1900,max=2100"`
+	} `json:"dob" binding:"required"`
+	// UserTermsAcceptedAt is the Unix timestamp when the user accepted Authorized User Terms (required for Celtic programs).
+	UserTermsAcceptedAt *int64 `json:"user_terms_accepted_at"`
+	AddressLine1        string `json:"address_line1"`
+	City                string `json:"city"`
+	State               string `json:"state"`
+	PostalCode          string `json:"postal_code"`
+	Country             string `json:"country"`
 }
 
 type issueCardResponse struct {
@@ -120,30 +136,52 @@ func (h *Handler) IssueCard(c *gin.Context) {
 		})
 		return
 	}
-
-	// 1. Create cardholder in Stripe Issuing.
-	cardholderID, err := h.issuing.CreateCardholder(ctx, stripeissuing.CreateCardholderRequest{
-		ExternalID:   memberID.String(),
-		FirstName:    req.FirstName,
-		LastName:     req.LastName,
-		Email:        req.Email,
-		AddressLine1: req.AddressLine1,
-		City:         req.City,
-		State:        req.State,
-		PostalCode:   req.PostalCode,
-		Country:      req.Country,
-	})
-	if err != nil {
-		slog.ErrorContext(ctx, "CreateCardholder failed", "member_id", memberID, "error", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "card issuer unavailable"})
+	if req.DOB == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "dob is required"})
 		return
+	}
+
+	// 1. Reuse an existing Stripe cardholder for this member if one exists with no
+	//    outstanding requirements (Stripe API: Requirements.PastDue empty); otherwise create new.
+	cardholderID, err := h.issuing.FindCardholderByMemberID(ctx, memberID.String())
+	if err != nil {
+		slog.ErrorContext(ctx, "FindCardholderByMemberID failed", "member_id", memberID, "error", err)
+		c.JSON(http.StatusBadGateway, cardIssuerErrorResponse(err, h.cfg.Environment))
+		return
+	}
+	if cardholderID == "" {
+		creq := stripeissuing.CreateCardholderRequest{
+			ExternalID:   memberID.String(),
+			FirstName:    req.FirstName,
+			LastName:     req.LastName,
+			Email:        req.Email,
+			DOBDay:       req.DOB.Day,
+			DOBMonth:     req.DOB.Month,
+			DOBYear:      req.DOB.Year,
+			AddressLine1: req.AddressLine1,
+			City:         req.City,
+			State:        req.State,
+			PostalCode:   req.PostalCode,
+			Country:      req.Country,
+			ClientIP:     c.ClientIP(),
+			UserAgent:    c.GetHeader("User-Agent"),
+		}
+		if req.UserTermsAcceptedAt != nil {
+			creq.UserTermsAcceptedAt = req.UserTermsAcceptedAt
+		}
+		cardholderID, err = h.issuing.CreateCardholder(ctx, creq)
+		if err != nil {
+			slog.ErrorContext(ctx, "CreateCardholder failed", "member_id", memberID, "error", err)
+			c.JSON(http.StatusBadGateway, cardIssuerErrorResponse(err, h.cfg.Environment))
+			return
+		}
 	}
 
 	// 2. Issue a virtual card.
 	cardID, cardToken, err := h.issuing.IssueCard(ctx, cardholderID, h.cfg.StripeIssuingCardProduct)
 	if err != nil {
 		slog.ErrorContext(ctx, "IssueCard failed", "member_id", memberID, "error", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "card issuer unavailable"})
+		c.JSON(http.StatusBadGateway, cardIssuerErrorResponse(err, h.cfg.Environment))
 		return
 	}
 
