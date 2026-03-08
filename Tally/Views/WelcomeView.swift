@@ -48,7 +48,7 @@ struct WelcomeView: View {
                     .frame(width: 96, height: 96)
                     .overlay(
                         Image(systemName: "creditcard.fill")
-                            .font(.system(size: 38))
+                            .font(TallyIcon.heroLg)
                             .foregroundStyle(.white)
                     )
                     .offset(y: iconFloat ? -6 : 6)
@@ -57,7 +57,7 @@ struct WelcomeView: View {
 
                 // Logo
                 Text("tally")
-                    .font(.system(size: 56, weight: .black))
+                    .font(TallyFont.brandHero)
                     .foregroundStyle(.white)
                     .tracking(-2.5)
                     .padding(.top, TallySpacing.lg)
@@ -67,7 +67,7 @@ struct WelcomeView: View {
 
                 // Tagline
                 Text("Split expenses, share cards,\nand settle up instantly.")
-                    .font(.system(size: 18, weight: .medium))
+                    .font(TallyFont.bodyLarge)
                     .foregroundStyle(.white.opacity(0.8))
                     .multilineTextAlignment(.center)
                     .lineSpacing(5)
@@ -112,7 +112,7 @@ struct WelcomeView: View {
 
                 // Legal
                 Text(legalText)
-                    .font(.system(size: 11))
+                    .font(TallyFont.smallLabelSemibold)
                     .multilineTextAlignment(.center)
                     .padding(.top, TallySpacing.lg)
                     .padding(.horizontal, TallySpacing.screenPadding)
@@ -177,12 +177,12 @@ private struct FeatureRow: View {
     var body: some View {
         HStack(spacing: 14) {
             Image(systemName: icon)
-                .font(.system(size: 15, weight: .medium))
+                .font(TallyIcon.sm)
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(width: 24)
 
             Text(text)
-                .font(.system(size: 15, weight: .medium))
+                .font(TallyFont.bodySemibold)
                 .foregroundStyle(.white.opacity(0.75))
 
             Spacer()
@@ -288,7 +288,7 @@ private struct FloatingParticles: View {
 private struct WelcomePrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 16, weight: .bold))
+            .font(TallyFont.buttonLarge)
             .tracking(-0.2)
             .foregroundStyle(TallyColors.hunterGreen)
             .frame(maxWidth: .infinity, minHeight: 56)
@@ -303,7 +303,7 @@ private struct WelcomePrimaryButtonStyle: ButtonStyle {
 private struct WelcomeSecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 16, weight: .semibold))
+            .font(TallyFont.buttonLarge)
             .tracking(-0.2)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 56)

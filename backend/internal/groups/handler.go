@@ -3,6 +3,7 @@ package groups
 
 import (
 	"database/sql"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -366,6 +367,7 @@ type groupSummary struct {
 	DisplayName    string  `json:"display_name,omitempty"`
 	Currency       string  `json:"currency"`
 	MemberCount    int     `json:"member_count"`
+	HasPhoto       bool    `json:"has_photo"`
 	MyCardLastFour *string `json:"my_card_last_four,omitempty"`
 	MyCardType     *string `json:"my_card_type,omitempty"`
 	CreatedAt      string  `json:"created_at"`
@@ -396,6 +398,7 @@ func (h *Handler) ListGroups(c *gin.Context) {
 	rows, err := h.db.QueryContext(c.Request.Context(), `
 		SELECT g.id, g.name, COALESCE(g.display_name, g.name), g.currency, g.created_at,
 		       (SELECT COUNT(*) FROM members m2 WHERE m2.group_id = g.id) AS member_count,
+		       (g.photo IS NOT NULL) AS has_photo,
 		       c.last_four, c.card_type
 		FROM tally_groups g
 		JOIN members m ON m.group_id = g.id
@@ -415,7 +418,7 @@ func (h *Handler) ListGroups(c *gin.Context) {
 		var g groupSummary
 		var createdAt time.Time
 		var lastFour, cardType sql.NullString
-		if err := rows.Scan(&g.GroupID, &g.Name, &g.DisplayName, &g.Currency, &createdAt, &g.MemberCount, &lastFour, &cardType); err != nil {
+		if err := rows.Scan(&g.GroupID, &g.Name, &g.DisplayName, &g.Currency, &createdAt, &g.MemberCount, &g.HasPhoto, &lastFour, &cardType); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "scan failed"})
 			return
 		}
@@ -1011,4 +1014,69 @@ func (h *Handler) ArchiveGroup(c *gin.Context) {
 		GroupID:    groupID.String(),
 		ArchivedAt: archivedAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// ── PUT /v1/groups/:id/photo ─────────────────────────────────────────────────
+
+// UploadPhoto stores a JPEG image for the group.
+// Expects raw JPEG bytes in the request body (Content-Type: image/jpeg).
+// Max size: 2 MB.
+func (h *Handler) UploadPhoto(c *gin.Context) {
+	groupID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group id"})
+		return
+	}
+
+	// Limit to 2 MB
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
+	data, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "photo too large (max 2 MB)"})
+		return
+	}
+	if len(data) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "empty body"})
+		return
+	}
+
+	_, err = h.db.ExecContext(c.Request.Context(),
+		`UPDATE tally_groups SET photo = $1, updated_at = NOW() WHERE id = $2`,
+		data, groupID,
+	)
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "upload photo failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db write failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// ── GET /v1/groups/:id/photo ─────────────────────────────────────────────────
+
+// GetPhoto serves the stored JPEG image for the group.
+func (h *Handler) GetPhoto(c *gin.Context) {
+	groupID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group id"})
+		return
+	}
+
+	var data []byte
+	err = h.db.QueryRowContext(c.Request.Context(),
+		`SELECT photo FROM tally_groups WHERE id = $1 AND photo IS NOT NULL`,
+		groupID,
+	).Scan(&data)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no photo"})
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "get photo failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db read failed"})
+		return
+	}
+
+	c.Data(http.StatusOK, "image/jpeg", data)
 }

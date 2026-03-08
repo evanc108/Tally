@@ -52,7 +52,7 @@ struct PayTipConfigView: View {
                     if viewModel.receiptTipCents > 0 {
                         HStack(spacing: TallySpacing.sm) {
                             Image(systemName: "lock.fill")
-                                .font(.system(size: 12))
+                                .font(TallyIcon.xs)
                             Text("Included gratuity")
                                 .font(TallyFont.body)
                             Spacer()
@@ -61,8 +61,10 @@ struct PayTipConfigView: View {
                         }
                         .foregroundStyle(TallyColors.textSecondary)
                         .padding(TallySpacing.cardPadding)
-                        .background(TallyColors.bgSecondary)
+                        .background(TallyColors.bgPrimary)
                         .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
+                        .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+                        .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
                         .padding(.top, TallySpacing.lg)
                     }
 
@@ -92,8 +94,12 @@ struct PayTipConfigView: View {
                                     .padding(.horizontal, TallySpacing.sm)
                                     .padding(.vertical, TallySpacing.sm)
                                     .frame(maxWidth: .infinity)
-                                    .background(selectedPreset == preset ? TallyColors.accent : TallyColors.bgSecondary)
+                                    .background(selectedPreset == preset ? TallyColors.ink : Color.clear)
                                     .clipShape(RoundedRectangle(cornerRadius: TallySpacing.chipCornerRadius))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: TallySpacing.chipCornerRadius)
+                                            .stroke(selectedPreset == preset ? Color.clear : TallyColors.divider, lineWidth: 1)
+                                    )
                             }
                             .buttonStyle(.plain)
                         }
@@ -118,8 +124,10 @@ struct PayTipConfigView: View {
                                 }
                         }
                         .padding(TallySpacing.md)
-                        .background(TallyColors.bgSecondary)
+                        .background(TallyColors.bgPrimary)
                         .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
+                        .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+                        .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
                         .padding(.top, TallySpacing.md)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
@@ -148,7 +156,7 @@ struct PayTipConfigView: View {
                     viewModel.push(.splitConfig)
                 }
             }
-            .buttonStyle(TallyPrimaryButtonStyle())
+            .buttonStyle(TallyDarkButtonStyle())
             .padding(.horizontal, TallySpacing.screenPadding)
             .padding(.bottom, TallySpacing.xxxl)
         }

@@ -171,12 +171,12 @@ struct SplitMethodView: View {
 
         return HStack(spacing: 3) {
             Text("\(pct)%")
-                .font(.system(size: 10, weight: .medium))
+                .font(TallyFont.micro)
                 .foregroundStyle(TallyColors.textSecondary.opacity(0.45))
                 .frame(width: segW)
             ForEach(state.members) { member in
                 Text("\(pct)%")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(TallyFont.micro)
                     .foregroundStyle(TallyColors.textSecondary.opacity(0.45))
                     .frame(width: segW)
             }
@@ -287,7 +287,7 @@ private struct SplitMethodCard: View {
 
                 if isSelected {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(TallyIcon.sm)
                         .foregroundStyle(TallyColors.accent)
                         .transition(.scale.combined(with: .opacity))
                 }

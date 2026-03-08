@@ -24,14 +24,14 @@ struct PayCardReadyView: View {
                     RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius)
                         .fill(
                             LinearGradient(
-                                colors: [TallyColors.accent, TallyColors.accent.opacity(0.65)],
+                                colors: [TallyColors.ink, TallyColors.ink.opacity(0.75)],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
                         )
                         .aspectRatio(1.586, contentMode: .fit)
                         .shadow(
-                            color: TallyColors.accent.opacity(pulse ? 0.5 : 0.2),
+                            color: TallyColors.ink.opacity(pulse ? 0.4 : 0.15),
                             radius: pulse ? 30 : 20
                         )
 
@@ -39,10 +39,10 @@ struct PayCardReadyView: View {
                         HStack {
                             // Circle initial
                             Text(String(circleName.prefix(1)).uppercased())
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(TallyColors.accent)
+                                .font(TallyFont.avatarSmall)
+                                .foregroundStyle(.white)
                                 .frame(width: 34, height: 34)
-                                .background(.white.opacity(0.3))
+                                .background(.white.opacity(0.15))
                                 .clipShape(Circle())
 
                             Spacer()
@@ -62,7 +62,7 @@ struct PayCardReadyView: View {
 
                         // Total amount
                         Text(CentsFormatter.format(viewModel.totalCents))
-                            .font(.system(size: 28, weight: .bold, design: .monospaced))
+                            .font(TallyFont.amountsXL)
                             .foregroundStyle(.white)
 
                         Spacer().frame(height: TallySpacing.md)
@@ -79,7 +79,7 @@ struct PayCardReadyView: View {
                             }
                             Spacer()
                             Text("tally")
-                                .font(.system(size: 22, weight: .bold, design: .rounded))
+                                .font(TallyFont.brandCard)
                                 .foregroundStyle(.white)
                         }
                     }

@@ -651,13 +651,9 @@ final class PayFlowViewModel {
             }
             await parseReceiptText(text)
 
-            // Auto-navigate after successful parse
-            if let receipt {
-                if receipt.totalCents > 0 || !receipt.items.isEmpty {
-                    push(.receiptReview)
-                } else {
-                    scanError = "Could not read receipt items or total. Try entering the amount manually."
-                }
+            // Set error if nothing useful was parsed
+            if let receipt, receipt.totalCents == 0 && receipt.items.isEmpty {
+                scanError = "Could not read receipt items or total. Please try again."
             }
         } catch {
             scanError = "Failed to read receipt: \(error.localizedDescription)"

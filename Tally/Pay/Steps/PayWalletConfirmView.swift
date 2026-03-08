@@ -11,8 +11,8 @@ struct PayWalletConfirmView: View {
             VStack(spacing: 0) {
                 // Wallet icon
                 Image(systemName: "wallet.bifold")
-                    .font(.system(size: 48, weight: .light))
-                    .foregroundStyle(TallyColors.accent)
+                    .font(TallyIcon.splash)
+                    .foregroundStyle(TallyColors.ink)
 
                 // Title
                 Text("Pay from Wallet")
@@ -42,7 +42,7 @@ struct PayWalletConfirmView: View {
             Button("Confirm Payment") {
                 viewModel.push(.complete)
             }
-            .buttonStyle(TallyPrimaryButtonStyle())
+            .buttonStyle(TallyDarkButtonStyle())
             .padding(.horizontal, TallySpacing.screenPadding)
             .padding(.bottom, TallySpacing.xxxl)
         }

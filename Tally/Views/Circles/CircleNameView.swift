@@ -41,7 +41,7 @@ struct CircleNameView: View {
                                     .fill(TallyColors.bgSecondary)
                                     .frame(width: 132, height: 132)
                                 Image(systemName: "camera.fill")
-                                    .font(.system(size: 34))
+                                    .font(TallyIcon.heroLg)
                                     .foregroundStyle(TallyColors.textSecondary)
                             }
                             .overlay(alignment: .bottomTrailing) { plusBadge }
@@ -90,7 +90,7 @@ struct CircleNameView: View {
 
     private var plusBadge: some View {
         Image(systemName: "plus")
-            .font(.system(size: 11, weight: .bold))
+            .font(TallyIcon.xxs)
             .foregroundStyle(.white)
             .frame(width: 26, height: 26)
             .background(TallyColors.accent)
@@ -100,7 +100,7 @@ struct CircleNameView: View {
 
     private var editBadge: some View {
         Image(systemName: "pencil")
-            .font(.system(size: 10, weight: .bold))
+            .font(TallyIcon.xxs)
             .foregroundStyle(.white)
             .frame(width: 26, height: 26)
             .background(TallyColors.accent)

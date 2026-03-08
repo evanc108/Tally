@@ -18,11 +18,11 @@ struct PayCompleteView: View {
                 // ── Checkmark circle ────────────────────────────────────
                 ZStack {
                     Circle()
-                        .fill(TallyColors.accent)
+                        .fill(TallyColors.ink)
                         .frame(width: 80, height: 80)
 
                     Image(systemName: "checkmark")
-                        .font(.system(size: 36, weight: .bold))
+                        .font(TallyIcon.heroLg)
                         .foregroundStyle(.white)
                 }
                 .scaleEffect(checkScale)
@@ -37,7 +37,7 @@ struct PayCompleteView: View {
                 // ── Total amount ────────────────────────────────────────
                 Text(CentsFormatter.format(viewModel.totalCents))
                     .font(TallyFont.display)
-                    .foregroundStyle(TallyColors.statusSuccess)
+                    .foregroundStyle(TallyColors.textPrimary)
                     .opacity(amountOpacity)
                     .padding(.top, TallySpacing.lg)
 
@@ -67,7 +67,7 @@ struct PayCompleteView: View {
 
             // ── Done button ─────────────────────────────────────────────
             Button("Done", action: onDone)
-                .buttonStyle(TallyPrimaryButtonStyle())
+                .buttonStyle(TallyDarkButtonStyle())
                 .opacity(buttonOpacity)
                 .padding(.horizontal, TallySpacing.screenPadding)
                 .padding(.bottom, TallySpacing.xxxl)

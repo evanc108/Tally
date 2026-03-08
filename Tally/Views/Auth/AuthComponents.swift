@@ -14,18 +14,18 @@ struct AuthHeader: View {
                     .frame(width: 36, height: 36)
                     .overlay(
                         Image(systemName: "creditcard.fill")
-                            .font(.system(size: 16))
+                            .font(TallyIcon.md)
                             .foregroundStyle(.white)
                     )
 
                 Text("tally")
-                    .font(.system(size: 28, weight: .black))
+                    .font(TallyFont.brandLarge)
                     .foregroundStyle(TallyColors.accent)
                     .tracking(-1.2)
             }
 
             Text(subtitle)
-                .font(.system(size: 14))
+                .font(TallyFont.bodySmall)
                 .foregroundStyle(TallyColors.textSecondary)
         }
         .padding(.top, TallySpacing.lg)
@@ -39,7 +39,7 @@ struct AuthPrimaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 15, weight: .bold))
+            .font(TallyFont.buttonBold)
             .tracking(-0.2)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 52)
@@ -59,7 +59,7 @@ struct AuthDivider: View {
                 .fill(TallyColors.divider)
                 .frame(height: 1)
             Text("or")
-                .font(.system(size: 13, weight: .medium))
+                .font(TallyFont.smallMedium)
                 .foregroundStyle(TallyColors.textTertiary)
             Rectangle()
                 .fill(TallyColors.divider)
@@ -98,10 +98,10 @@ struct SocialAuthButton: View {
         } label: {
             HStack(spacing: TallySpacing.xs) {
                 Image(systemName: provider.iconName)
-                    .font(.system(size: 18))
+                    .font(TallyIcon.lg)
                     .foregroundStyle(provider == .apple ? TallyColors.textPrimary : .red)
                 Text(provider.label)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(TallyFont.button)
                     .tracking(-0.1)
                     .foregroundStyle(TallyColors.textPrimary)
             }
@@ -131,7 +131,7 @@ struct AuthFooterLink: View {
             Button(action) {
                 onTap()
             }
-            .font(.system(size: 13, weight: .semibold))
+            .font(TallyFont.smallSemibold)
             .foregroundStyle(TallyColors.accent)
         }
     }

@@ -27,7 +27,7 @@ struct ChooseLeaderView: View {
                     Button { showInfoSheet = true } label: {
                         HStack(spacing: TallySpacing.xs) {
                             Image(systemName: "info.circle")
-                                .font(.system(size: 14))
+                                .font(TallyIcon.sm)
                             Text("Learn more")
                                 .font(TallyFont.body)
                         }
@@ -94,7 +94,7 @@ private struct LeaderCard: View {
                 // Avatar with optional shield badge
                 ZStack(alignment: .bottomTrailing) {
                     Text(initial)
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(TallyFont.titleSemibold)
                         .foregroundStyle(.white)
                         .frame(width: 52, height: 52)
                         .background(color)
@@ -102,7 +102,7 @@ private struct LeaderCard: View {
 
                     if isCreator {
                         Image(systemName: "shield.fill")
-                            .font(.system(size: 10))
+                            .font(TallyIcon.xxs)
                             .foregroundStyle(.white)
                             .frame(width: 20, height: 20)
                             .background(TallyColors.accent)

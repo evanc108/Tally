@@ -87,7 +87,7 @@ private struct CloseButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "xmark")
-                .font(.system(size: 16, weight: .semibold))
+                .font(TallyIcon.md)
                 .foregroundStyle(TallyColors.textPrimary)
         }
     }
@@ -99,7 +99,7 @@ private struct BackChevron: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "chevron.left")
-                .font(.system(size: 16, weight: .semibold))
+                .font(TallyIcon.md)
                 .foregroundStyle(TallyColors.textPrimary)
         }
     }

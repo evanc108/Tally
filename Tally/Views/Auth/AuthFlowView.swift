@@ -15,7 +15,7 @@ struct AuthFlowView: View {
                     authManager.backToWelcome()
                 } label: {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(TallyIcon.md)
                         .foregroundStyle(TallyColors.textSecondary)
                         .frame(width: 44, height: 44)
                 }

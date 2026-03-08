@@ -23,8 +23,8 @@ struct PayWaitingView: View {
                 // ── Header ──────────────────────────────────────────────
                 if showContinue {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 48))
-                        .foregroundStyle(TallyColors.statusSuccess)
+                        .font(TallyIcon.splash)
+                        .foregroundStyle(TallyColors.ink)
                         .padding(.bottom, TallySpacing.lg)
 
                     Text("All confirmed!")
@@ -36,7 +36,7 @@ struct PayWaitingView: View {
                         .foregroundStyle(TallyColors.textPrimary)
 
                     ProgressView()
-                        .tint(TallyColors.accent)
+                        .tint(TallyColors.ink)
                         .padding(.top, TallySpacing.lg)
                 }
 
@@ -65,7 +65,7 @@ struct PayWaitingView: View {
                     viewModel.applyTipToSplits()
                     viewModel.push(.leaderApprove)
                 }
-                .buttonStyle(TallyPrimaryButtonStyle())
+                .buttonStyle(TallyDarkButtonStyle())
                 .padding(.horizontal, TallySpacing.screenPadding)
                 .padding(.bottom, TallySpacing.xxxl)
             }
@@ -79,7 +79,7 @@ struct PayWaitingView: View {
         HStack(spacing: TallySpacing.lg) {
             // Avatar circle
             Text(String(split.memberName.prefix(1)).uppercased())
-                .font(.system(size: 13, weight: .semibold))
+                .font(TallyFont.smallSemibold)
                 .foregroundStyle(TallyColors.ink)
                 .frame(width: 32, height: 32)
                 .background(TallyColors.cardColor(for: index))
@@ -96,11 +96,11 @@ struct PayWaitingView: View {
             // Status icon
             if split.confirmed {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 20))
-                    .foregroundStyle(TallyColors.statusSuccess)
+                    .font(TallyIcon.xl)
+                    .foregroundStyle(TallyColors.ink)
             } else {
                 Image(systemName: "clock")
-                    .font(.system(size: 20))
+                    .font(TallyIcon.xl)
                     .foregroundStyle(TallyColors.textTertiary)
             }
         }

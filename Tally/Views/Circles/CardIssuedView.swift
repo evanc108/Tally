@@ -22,12 +22,12 @@ struct CardIssuedView: View {
                         .padding(.top, TallySpacing.sm)
 
                     // Card visual
-                    CardVisual(
-                        photo: state.photo,
+                    TallyCard(
                         circleName: state.circleName,
                         last4: "4289",
-                        isVirtual: cardType == .virtual
+                        photo: state.photo
                     )
+                    .aspectRatio(1.586, contentMode: .fit)
                     .scaleEffect(cardAppeared ? 1.0 : 0.85)
                     .opacity(cardAppeared ? 1.0 : 0)
                     .padding(.top, TallySpacing.xxl)
@@ -57,7 +57,7 @@ struct CardIssuedView: View {
                                 ProgressView().tint(.white)
                             } else {
                                 Image(systemName: "wallet.bifold")
-                                    .font(.system(size: 18))
+                                    .font(TallyIcon.lg)
                                 Text("Add to Apple Wallet")
                             }
                         }
@@ -101,81 +101,3 @@ struct CardIssuedView: View {
     }
 }
 
-// MARK: - Card Visual
-
-struct CardVisual: View {
-    let photo: UIImage?
-    let circleName: String
-    let last4: String
-    let isVirtual: Bool
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius)
-                .fill(
-                    LinearGradient(
-                        colors: [TallyColors.accent, TallyColors.accent.opacity(0.65)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .aspectRatio(1.586, contentMode: .fit)
-                .shadow(color: TallyColors.accent.opacity(0.35), radius: 24, y: 12)
-
-            VStack(alignment: .leading) {
-                HStack {
-                    if let photo {
-                        Image(uiImage: photo)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 34, height: 34)
-                            .clipShape(Circle())
-                    } else {
-                        Text(String(circleName.prefix(1)).uppercased())
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(TallyColors.accent)
-                            .frame(width: 34, height: 34)
-                            .background(.white.opacity(0.3))
-                            .clipShape(Circle())
-                    }
-
-                    Spacer()
-
-                    Text(isVirtual ? "VIRTUAL" : "PHYSICAL")
-                        .font(TallyFont.smallLabel)
-                        .fontWeight(.bold)
-                        .foregroundStyle(.white.opacity(0.85))
-                        .padding(.horizontal, TallySpacing.sm)
-                        .padding(.vertical, TallySpacing.xs)
-                        .background(.white.opacity(0.2))
-                        .clipShape(Capsule())
-                }
-
-                Spacer()
-
-                Text("•••• •••• •••• \(last4)")
-                    .font(.system(size: 18, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white)
-
-                Spacer().frame(height: TallySpacing.md)
-
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(circleName.uppercased())
-                            .font(TallyFont.smallLabel)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.white.opacity(0.7))
-                        Text("Active")
-                            .font(TallyFont.smallLabel)
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-                    Spacer()
-                    Text("tally")
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                }
-            }
-            .padding(20)
-        }
-    }
-}

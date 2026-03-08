@@ -164,6 +164,8 @@ func main() {
 		groupMember.POST("/members",     groupHandler.AddMember)
 		groupMember.GET("/ious",         groupHandler.ListIOUs)
 		groupMember.POST("/ious/:iouId/settle", groupHandler.SettleIOU)
+		groupMember.PUT("/photo",        groupHandler.UploadPhoto)
+		groupMember.GET("/photo",        groupHandler.GetPhoto)
 
 		// Leader-only routes — requires caller to be the group leader.
 		groupLeader := api.Group("/groups/:id")

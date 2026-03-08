@@ -43,7 +43,7 @@ struct TwoFactorView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(TallyIcon.md)
                         Text("Back")
                             .font(TallyFont.bodySemibold)
                     }
@@ -62,7 +62,7 @@ struct TwoFactorView: View {
                     .fill(TallyColors.accentLight)
                     .frame(width: 80, height: 80)
                 Image(systemName: "lock.shield")
-                    .font(.system(size: 32))
+                    .font(TallyIcon.hero)
                     .foregroundStyle(TallyColors.accent)
             }
             .scaleEffect(appeared ? 1 : 0.6)
@@ -204,7 +204,7 @@ private struct TwoFactorCodeField: View {
                 let isActive = index == code.count
 
                 Text(char)
-                    .font(.system(size: 24, weight: .bold, design: .monospaced))
+                    .font(TallyFont.codeDisplay)
                     .foregroundStyle(TallyColors.textPrimary)
                     .frame(width: 48, height: 56)
                     .background(TallyColors.bgSecondary)

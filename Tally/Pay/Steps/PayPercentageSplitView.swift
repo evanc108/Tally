@@ -45,7 +45,8 @@ struct PayPercentageSplitView: View {
                     }
                     .background(TallyColors.bgPrimary)
                     .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
-                    .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 3)
+                    .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+                    .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
                     .padding(.top, TallySpacing.xl)
 
                     // Per-member amount preview
@@ -60,7 +61,7 @@ struct PayPercentageSplitView: View {
             Button("Continue") {
                 handleContinue()
             }
-            .buttonStyle(TallyPrimaryButtonStyle())
+            .buttonStyle(TallyDarkButtonStyle())
             .disabled(!isValid)
             .opacity(isValid ? 1.0 : 0.5)
             .padding(.horizontal, TallySpacing.screenPadding)
@@ -84,7 +85,7 @@ struct PayPercentageSplitView: View {
 
                 HStack(spacing: TallySpacing.md) {
                     Text(String(member.displayName.prefix(1)).uppercased())
-                        .font(.system(size: 11, weight: .bold))
+                        .font(TallyFont.smallLabel)
                         .foregroundStyle(.white)
                         .frame(width: 24, height: 24)
                         .background(TallyColors.cardColor(for: index))

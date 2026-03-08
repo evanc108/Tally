@@ -52,7 +52,7 @@ struct PayReceiptReviewView: View {
             Button("Continue") {
                 viewModel.push(.tipConfig)
             }
-            .buttonStyle(TallyPrimaryButtonStyle())
+            .buttonStyle(TallyDarkButtonStyle())
             .disabled(receipt == nil)
             .opacity(receipt == nil ? 0.5 : 1.0)
             .padding(.horizontal, TallySpacing.screenPadding)
@@ -147,7 +147,7 @@ struct PayReceiptReviewView: View {
             Spacer().frame(height: TallySpacing.xxxl)
 
             Image(systemName: "doc.text")
-                .font(.system(size: 48, weight: .light))
+                .font(TallyIcon.splash)
                 .foregroundStyle(TallyColors.textTertiary)
 
             Text("No receipt to review")

@@ -115,7 +115,7 @@ struct ScanIDView: View {
                     // Tip
                     HStack(spacing: TallySpacing.sm) {
                         Image(systemName: "info.circle")
-                            .font(.system(size: 14))
+                            .font(TallyIcon.sm)
                             .foregroundStyle(TallyColors.textTertiary)
                         Text(side.tipText)
                             .font(TallyFont.small)
@@ -169,7 +169,7 @@ private struct IDFramePlaceholder: View {
     var body: some View {
         VStack(spacing: TallySpacing.md) {
             Image(systemName: side == .front ? "rectangle.portrait" : "barcode.viewfinder")
-                .font(.system(size: 36))
+                .font(TallyIcon.heroLg)
                 .foregroundStyle(TallyColors.textPlaceholder)
 
             VStack(spacing: 4) {

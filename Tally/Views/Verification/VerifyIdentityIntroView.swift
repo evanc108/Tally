@@ -21,7 +21,7 @@ struct VerifyIdentityIntroView: View {
                             .fill(TallyColors.accentLight)
                             .frame(width: 72, height: 72)
                         Image(systemName: "checkmark.shield.fill")
-                            .font(.system(size: 30))
+                            .font(TallyIcon.hero)
                             .foregroundStyle(TallyColors.accent)
                     }
                     .scaleEffect(appeared ? 1 : 0.5)
@@ -44,7 +44,7 @@ struct VerifyIdentityIntroView: View {
                     // Secured badge
                     HStack(spacing: 6) {
                         Image(systemName: "lock.shield.fill")
-                            .font(.system(size: 12))
+                            .font(TallyIcon.xs)
                             .foregroundStyle(TallyColors.accent)
                         Text("Secured by Stripe Identity")
                             .font(TallyFont.caption)
@@ -125,7 +125,7 @@ private struct RequirementRow: View {
                     .fill(iconBg)
                     .frame(width: 44, height: 44)
                 Image(systemName: icon)
-                    .font(.system(size: 18))
+                    .font(TallyIcon.lg)
                     .foregroundStyle(iconColor)
             }
 

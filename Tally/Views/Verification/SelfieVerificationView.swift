@@ -47,7 +47,7 @@ struct SelfieVerificationView: View {
                         // Placeholder face
                         VStack(spacing: TallySpacing.sm) {
                             Image(systemName: "person.crop.circle")
-                                .font(.system(size: 56))
+                                .font(TallyIcon.full)
                                 .foregroundStyle(TallyColors.textPlaceholder)
                             Text("Look straight ahead")
                                 .font(TallyFont.small)
@@ -69,7 +69,7 @@ struct SelfieVerificationView: View {
                                 .fill(TallyColors.accent)
                                 .frame(width: 56, height: 56)
                             Image(systemName: "camera.fill")
-                                .font(.system(size: 22))
+                                .font(TallyIcon.xxl)
                                 .foregroundStyle(.white)
                         }
                     }
@@ -80,7 +80,7 @@ struct SelfieVerificationView: View {
                     // Tips
                     HStack(spacing: TallySpacing.sm) {
                         Image(systemName: "info.circle")
-                            .font(.system(size: 14))
+                            .font(TallyIcon.sm)
                             .foregroundStyle(TallyColors.textTertiary)
                         Text("Remove glasses, hats, or masks. Use good\nlighting and a plain background.")
                             .font(TallyFont.small)

@@ -86,7 +86,7 @@ struct PaySplitConfigView: View {
             Button("Continue") {
                 handleContinue()
             }
-            .buttonStyle(TallyPrimaryButtonStyle())
+            .buttonStyle(TallyDarkButtonStyle())
             .disabled(isContinueDisabled)
             .opacity(isContinueDisabled ? 0.5 : 1.0)
             .padding(.horizontal, TallySpacing.screenPadding)
@@ -116,7 +116,7 @@ struct PaySplitConfigView: View {
             ForEach(Array(viewModel.splits.enumerated()), id: \.element.id) { index, split in
                 HStack(spacing: TallySpacing.md) {
                     Text(String(split.memberName.prefix(1)).uppercased())
-                        .font(.system(size: 13, weight: .bold))
+                        .font(TallyFont.overline)
                         .foregroundStyle(.white)
                         .frame(width: 32, height: 32)
                         .background(TallyColors.cardColor(for: index))
@@ -167,7 +167,8 @@ struct PaySplitConfigView: View {
             }
             .background(TallyColors.bgPrimary)
             .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
-            .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 3)
+            .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+            .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
 
             // Per-member amount preview
             VStack(spacing: 0) {
@@ -177,7 +178,7 @@ struct PaySplitConfigView: View {
 
                     HStack(spacing: TallySpacing.md) {
                         Text(String(member.displayName.prefix(1)).uppercased())
-                            .font(.system(size: 11, weight: .bold))
+                            .font(TallyFont.smallLabel)
                             .foregroundStyle(.white)
                             .frame(width: 24, height: 24)
                             .background(TallyColors.cardColor(for: index))
@@ -275,13 +276,13 @@ private struct SplitMethodCard: View {
             HStack(spacing: TallySpacing.lg) {
                 // Left accent bar
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(isSelected ? TallyColors.accent : Color.clear)
+                    .fill(isSelected ? TallyColors.ink : Color.clear)
                     .frame(width: 3, height: 44)
 
                 // Icon
                 Image(systemName: method.icon)
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(isSelected ? TallyColors.accent : TallyColors.textSecondary)
+                    .font(TallyIcon.xl)
+                    .foregroundStyle(isSelected ? TallyColors.ink : TallyColors.textSecondary)
                     .frame(width: 28)
 
                 // Label + description
@@ -299,19 +300,17 @@ private struct SplitMethodCard: View {
                 // Checkmark
                 if isSelected {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(TallyColors.accent)
+                        .font(TallyIcon.sm)
+                        .foregroundStyle(TallyColors.ink)
                         .transition(.scale.combined(with: .opacity))
                 }
             }
             .padding(.horizontal, TallySpacing.cardPadding)
             .padding(.vertical, TallySpacing.lg)
-            .background(isSelected ? TallyColors.accent.opacity(0.05) : TallyColors.bgPrimary)
+            .background(TallyColors.bgPrimary)
             .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
-            .overlay(
-                RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius)
-                    .stroke(isSelected ? TallyColors.accent.opacity(0.3) : TallyColors.divider, lineWidth: 1)
-            )
+            .shadow(color: .black.opacity(isSelected ? 0.10 : 0.06), radius: 12, y: 4)
+            .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
         }
         .buttonStyle(.plain)
     }
@@ -331,13 +330,13 @@ private struct AssignmentModeCard: View {
             HStack(spacing: TallySpacing.lg) {
                 // Left accent bar
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(isSelected ? TallyColors.accent : Color.clear)
+                    .fill(isSelected ? TallyColors.ink : Color.clear)
                     .frame(width: 3, height: 44)
 
                 // Icon
                 Image(systemName: icon)
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(isSelected ? TallyColors.accent : TallyColors.textSecondary)
+                    .font(TallyIcon.xl)
+                    .foregroundStyle(isSelected ? TallyColors.ink : TallyColors.textSecondary)
                     .frame(width: 28)
 
                 // Label + description
@@ -355,19 +354,17 @@ private struct AssignmentModeCard: View {
                 // Checkmark
                 if isSelected {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(TallyColors.accent)
+                        .font(TallyIcon.sm)
+                        .foregroundStyle(TallyColors.ink)
                         .transition(.scale.combined(with: .opacity))
                 }
             }
             .padding(.horizontal, TallySpacing.cardPadding)
             .padding(.vertical, TallySpacing.lg)
-            .background(isSelected ? TallyColors.accent.opacity(0.05) : TallyColors.bgPrimary)
+            .background(TallyColors.bgPrimary)
             .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
-            .overlay(
-                RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius)
-                    .stroke(isSelected ? TallyColors.accent.opacity(0.3) : TallyColors.divider, lineWidth: 1)
-            )
+            .shadow(color: .black.opacity(isSelected ? 0.10 : 0.06), radius: 12, y: 4)
+            .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
         }
         .buttonStyle(.plain)
     }

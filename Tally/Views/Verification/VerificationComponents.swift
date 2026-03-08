@@ -13,7 +13,7 @@ struct VerificationNavBar: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(TallyIcon.md)
                     Text("Back")
                         .font(TallyFont.bodySemibold)
                 }
@@ -45,7 +45,7 @@ struct PoweredByStripe: View {
                 .font(TallyFont.caption)
                 .foregroundStyle(TallyColors.textTertiary)
             Text("stripe")
-                .font(.system(size: 12, weight: .bold))
+                .font(TallyFont.captionBold)
                 .foregroundStyle(Color(hex: 0x635BFF))
         }
     }

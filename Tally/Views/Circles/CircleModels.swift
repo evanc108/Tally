@@ -10,6 +10,8 @@ struct TallyCircle: Identifiable {
     var serverId: String?
     var name: String
     var photo: UIImage?
+    /// Whether the server has a photo for this circle (used to trigger lazy fetch).
+    var hasServerPhoto: Bool = false
     var members: [CircleMember]
     /// Server-reported member count (includes "You"). Falls back to local members + 1.
     var serverMemberCount: Int?
@@ -99,6 +101,7 @@ extension TallyCircle {
             archivedAt: dto.archivedAt.flatMap { isoFormatter.date(from: $0) },
             createdAt: isoFormatter.date(from: dto.createdAt) ?? .now
         )
+        self.hasServerPhoto = dto.hasPhoto ?? false
     }
 }
 

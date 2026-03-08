@@ -28,7 +28,7 @@ struct CircleReadyView: View {
                             .clipShape(Circle())
                     } else {
                         Text(String(state.circleName.prefix(1)).uppercased())
-                            .font(.system(size: 36, weight: .bold))
+                            .font(TallyFont.brandInitial)
                             .foregroundStyle(.white)
                             .frame(width: 96, height: 96)
                             .background(
@@ -93,7 +93,7 @@ struct CircleReadyView: View {
 
     private func avatarBubble(initial: String, index: Int) -> some View {
         Text(initial)
-            .font(.system(size: 15, weight: .semibold))
+            .font(TallyFont.button)
             .foregroundStyle(TallyColors.ink)
             .frame(width: 44, height: 44)
             .background(TallyColors.cardColor(for: index))
