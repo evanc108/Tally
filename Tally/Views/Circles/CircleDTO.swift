@@ -75,6 +75,7 @@ struct CircleSummaryDTO: Decodable {
     let displayName: String?
     let currency: String
     let memberCount: Int?
+    let hasPhoto: Bool?
     let myCardLastFour: String?
     let myCardType: String?
     let createdAt: String
@@ -86,6 +87,7 @@ struct CircleSummaryDTO: Decodable {
         case displayName    = "display_name"
         case currency
         case memberCount    = "member_count"
+        case hasPhoto       = "has_photo"
         case myCardLastFour = "my_card_last_four"
         case myCardType     = "my_card_type"
         case createdAt      = "created_at"

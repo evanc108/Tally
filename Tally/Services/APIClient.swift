@@ -92,9 +92,25 @@ actor APIClient {
         try await sendVoid(method: .delete, path: path)
     }
 
+    /// PUT raw bytes with a custom content type (e.g. image/jpeg).
+    func putRaw(path: String, data: Data, contentType: String) async throws {
+        try await sendVoid(method: .put, path: path, bodyData: data, contentType: contentType)
+    }
+
+    /// GET raw bytes (e.g. image download). Returns nil on 404.
+    func getRaw(path: String) async throws -> Data? {
+        let token = try await fetchToken()
+        let request = buildRequest(method: .get, path: path, bodyData: nil, token: token)
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else { return nil }
+        if http.statusCode == 404 { return nil }
+        guard (200..<300).contains(http.statusCode) else { return nil }
+        return data
+    }
+
     // MARK: - Core: void request (no decode)
 
-    private func sendVoid(method: HTTPMethod, path: String, bodyData: Data? = nil) async throws {
+    private func sendVoid(method: HTTPMethod, path: String, bodyData: Data? = nil, contentType: String? = nil) async throws {
         var lastError: Error = TallyError.network(URLError(.unknown))
 
         for attempt in 0..<3 {
@@ -106,7 +122,10 @@ actor APIClient {
 
             do {
                 let token   = try await fetchToken()
-                let request = buildRequest(method: method, path: path, bodyData: bodyData, token: token)
+                var request = buildRequest(method: method, path: path, bodyData: bodyData, token: token)
+                if let contentType {
+                    request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+                }
                 let (_, response) = try await urlSession.data(for: request)
                 guard let http = response as? HTTPURLResponse else {
                     throw TallyError.network(URLError(.badServerResponse))

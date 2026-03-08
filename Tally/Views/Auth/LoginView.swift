@@ -40,7 +40,7 @@ struct LoginView: View {
                 HStack {
                     Spacer()
                     Button("Forgot password?") {}
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(TallyFont.smallSemibold)
                     .foregroundStyle(TallyColors.accent)
                 }
 

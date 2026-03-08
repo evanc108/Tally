@@ -32,7 +32,7 @@ struct VerificationProcessingView: View {
                         .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: appeared)
                 } else {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 30, weight: .bold))
+                        .font(TallyIcon.hero)
                         .foregroundStyle(TallyColors.accent)
                 }
             }
@@ -60,7 +60,7 @@ struct VerificationProcessingView: View {
                             if index < currentStepIndex {
                                 // Completed
                                 Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 22))
+                                    .font(TallyIcon.xxl)
                                     .foregroundStyle(TallyColors.accent)
                                     .transition(.scale.combined(with: .opacity))
                             } else if index == currentStepIndex {

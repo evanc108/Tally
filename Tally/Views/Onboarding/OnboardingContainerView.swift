@@ -37,7 +37,7 @@ struct OnboardingContainerView: View {
                     }
                 } label: {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(TallyIcon.md)
                         .foregroundStyle(TallyColors.textSecondary)
                         .frame(width: 44, height: 44)
                 }
@@ -200,7 +200,7 @@ private struct CircleIllustration: View {
                 .shadow(color: TallyColors.accent.opacity(0.25), radius: 12, y: 8)
                 .overlay(alignment: .topLeading) {
                     Text("tally")
-                        .font(.system(size: 11, weight: .heavy))
+                        .font(TallyFont.brandTiny)
                         .foregroundStyle(.white)
                         .tracking(-0.3)
                         .padding(.leading, 14)
@@ -252,7 +252,7 @@ private struct CircleIllustration: View {
     private func dollarBadge(angle: Double, distance: CGFloat) -> some View {
         let rad = angle * .pi / 180
         return Text("$")
-            .font(.system(size: 9, weight: .bold))
+            .font(TallyFont.microBold)
             .foregroundStyle(TallyColors.accent)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -285,10 +285,10 @@ private struct ReceiptIllustration: View {
                 .overlay {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("The Rustic Table")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(TallyFont.micro)
                             .foregroundStyle(TallyColors.textPrimary)
                         Text("Mar 1, 2026")
-                            .font(.system(size: 7))
+                            .font(TallyFont.decorativeTiny)
                             .foregroundStyle(TallyColors.textTertiary)
 
                         Spacer().frame(height: 4)
@@ -301,10 +301,10 @@ private struct ReceiptIllustration: View {
 
                         HStack {
                             Text("Total")
-                                .font(.system(size: 8, weight: .bold))
+                                .font(TallyFont.decorativeBold)
                             Spacer()
                             Text("$73.13")
-                                .font(.system(size: 8, weight: .bold))
+                                .font(TallyFont.decorativeBold)
                         }
                         .foregroundStyle(TallyColors.textPrimary)
                     }
@@ -321,7 +321,7 @@ private struct ReceiptIllustration: View {
                 .frame(width: 80, height: 80)
                 .overlay(
                     Image(systemName: "camera.fill")
-                        .font(.system(size: 24))
+                        .font(TallyIcon.xxxl)
                         .foregroundStyle(TallyColors.accent)
                 )
                 .offset(x: -70, y: 30)
@@ -341,11 +341,11 @@ private struct ReceiptIllustration: View {
     private func receiptLine(_ item: String, _ price: String) -> some View {
         HStack {
             Text(item)
-                .font(.system(size: 8))
+                .font(TallyFont.decorative)
                 .foregroundStyle(TallyColors.textSecondary)
             Spacer()
             Text(price)
-                .font(.system(size: 8))
+                .font(TallyFont.decorative)
                 .foregroundStyle(TallyColors.textSecondary)
         }
     }
@@ -377,10 +377,10 @@ private struct SettleIllustration: View {
             // Transfer arrow
             VStack(spacing: 4) {
                 Image(systemName: "arrow.left.arrow.right")
-                    .font(.system(size: 18, weight: .medium))
+                    .font(TallyIcon.lg)
                     .foregroundStyle(TallyColors.accent)
                 Text("$24.50")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(TallyFont.microBold)
                     .foregroundStyle(TallyColors.accent)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
@@ -397,7 +397,7 @@ private struct SettleIllustration: View {
                 .frame(width: 32, height: 32)
                 .overlay(
                     Text("A")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(TallyFont.avatarTiny)
                         .foregroundStyle(TallyColors.accent.opacity(0.7))
                 )
                 .offset(x: -90, y: 70)
@@ -408,7 +408,7 @@ private struct SettleIllustration: View {
                 .frame(width: 32, height: 32)
                 .overlay(
                     Text("S")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(TallyFont.avatarTiny)
                         .foregroundStyle(TallyColors.accent.opacity(0.7))
                 )
                 .offset(x: 90, y: 70)
@@ -416,7 +416,7 @@ private struct SettleIllustration: View {
 
             // Settled badge
             Text("Settled \u{2713}")
-                .font(.system(size: 11, weight: .semibold))
+                .font(TallyFont.smallLabelSemibold)
                 .foregroundStyle(TallyColors.accent.opacity(0.7))
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
@@ -450,10 +450,10 @@ private struct SettleIllustration: View {
                         .fill(TallyColors.accent.opacity(0.3))
                         .frame(width: 36, height: 6)
                     Text("\(name) \u{2022}\u{2022}\(last4)")
-                        .font(.system(size: 8))
+                        .font(TallyFont.decorative)
                         .foregroundStyle(TallyColors.textSecondary)
                     Text(amount)
-                        .font(.system(size: 13, weight: .bold))
+                        .font(TallyFont.overline)
                         .foregroundStyle(TallyColors.textPrimary)
                 }
                 .padding(.leading, 10)
@@ -484,7 +484,7 @@ private struct PageIndicator: View {
 private struct OnboardingButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 15, weight: .bold))
+            .font(TallyFont.buttonBold)
             .tracking(-0.2)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 52)

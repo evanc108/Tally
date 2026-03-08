@@ -71,7 +71,7 @@ struct AddMembersView: View {
                 // Search bar
                 HStack(spacing: TallySpacing.md) {
                     Image(systemName: "magnifyingglass")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(TallyIcon.md)
                         .foregroundStyle(TallyColors.textSecondary)
                     TextField("Search contacts...", text: $searchText)
                         .font(TallyFont.body)
@@ -150,7 +150,7 @@ struct AddMembersView: View {
                     Button {} label: {
                         HStack(spacing: TallySpacing.md) {
                             Image(systemName: "link")
-                                .font(.system(size: 16, weight: .medium))
+                                .font(TallyIcon.md)
                                 .foregroundStyle(TallyColors.textSecondary)
                                 .frame(width: 48, height: 48)
                                 .background(TallyColors.bgSecondary)
@@ -168,7 +168,7 @@ struct AddMembersView: View {
                             Spacer()
 
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 14, weight: .medium))
+                                .font(TallyIcon.sm)
                                 .foregroundStyle(TallyColors.textTertiary)
                         }
                         .padding(.horizontal, TallySpacing.screenPadding)
@@ -229,7 +229,7 @@ private struct TallyUserRow: View {
             HStack(spacing: TallySpacing.md) {
                 // Avatar
                 Text(initials)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(TallyFont.buttonLarge)
                     .foregroundStyle(.white)
                     .frame(width: 48, height: 48)
                     .background(color)
@@ -250,7 +250,7 @@ private struct TallyUserRow: View {
                 // Selection indicator
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 24))
+                        .font(TallyIcon.xxxl)
                         .foregroundStyle(TallyColors.statusSuccess)
                 } else {
                     Circle()
@@ -275,7 +275,7 @@ private struct DeviceContactRow: View {
         HStack(spacing: TallySpacing.md) {
             // Avatar (muted)
             Text(initials)
-                .font(.system(size: 16, weight: .semibold))
+                .font(TallyFont.buttonLarge)
                 .foregroundStyle(TallyColors.textSecondary)
                 .frame(width: 48, height: 48)
                 .background(TallyColors.bgSecondary)
@@ -333,7 +333,7 @@ private struct MemberChipView: View {
             if removable {
                 Button(action: onRemove) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(TallyIcon.xxs)
                         .foregroundStyle(TallyColors.textSecondary)
                 }
             }

@@ -1,37 +1,29 @@
 import SwiftUI
 
 struct PayFlowView: View {
-    var preselectedCircle: TallyCircle? = nil
-    /// Pre-loaded circles from CirclesViewModel — avoids re-fetching GET /v1/groups.
-    var availableCircles: [TallyCircle] = []
-    @State private var viewModel = PayFlowViewModel()
+    /// Pre-populated viewModel from the scan modal (has receipt already set).
+    var preloadedViewModel: PayFlowViewModel? = nil
+    @State private var viewModel: PayFlowViewModel
     @Environment(\.dismiss) private var dismiss
+
+    init(preloadedViewModel: PayFlowViewModel? = nil) {
+        self.preloadedViewModel = preloadedViewModel
+        self._viewModel = State(initialValue: preloadedViewModel ?? PayFlowViewModel())
+    }
 
     var body: some View {
         NavigationStack(path: $viewModel.path) {
-            PayReceiptEntryView(viewModel: viewModel)
+            PayReceiptReviewView(viewModel: viewModel)
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarLeading) {
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(TallyColors.textPrimary)
-                        }
+                        GlassNavButton(icon: "xmark") { dismiss() }
                     }
                 }
                 .navigationDestination(for: PayFlowRoute.self) { route in
                     destination(for: route)
                 }
-        }
-        .task {
-            viewModel.preselectedCircle = preselectedCircle
-            if availableCircles.isEmpty {
-                await viewModel.fetchCirclesWithCards()
-            } else {
-                viewModel.loadCircles(availableCircles)
-            }
         }
     }
 
@@ -69,7 +61,8 @@ struct PayFlowView: View {
                 .withPayBackButton { viewModel.pop() }
 
         case .cardReady:
-            PayCardReadyView(viewModel: viewModel)
+            // Merged into LeaderApproveView — redirect
+            PayLeaderApproveView(viewModel: viewModel)
                 .withPayBackButton { viewModel.pop() }
 
         case .complete:
@@ -99,11 +92,7 @@ private struct PayBackButtonModifier: ViewModifier {
             .navigationBarBackButtonHidden()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: action) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(TallyColors.textPrimary)
-                    }
+                    GlassNavButton(icon: "chevron.left", action: action)
                 }
             }
     }
@@ -118,5 +107,9 @@ extension View {
 // MARK: - Preview
 
 #Preview {
-    PayFlowView()
+    PayFlowView(preloadedViewModel: {
+        let vm = PayFlowViewModel()
+        vm.receipt = PayReceipt.sample
+        return vm
+    }())
 }

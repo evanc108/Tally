@@ -1,0 +1,1 @@
+ALTER TABLE tally_groups DROP COLUMN IF EXISTS photo;

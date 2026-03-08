@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Persisted Models (Codable snapshots of in-memory circle data)
 
@@ -80,6 +81,48 @@ enum CircleStore {
         if let data = try? JSONEncoder().encode(dict) {
             UserDefaults.standard.set(data, forKey: key)
         }
+    }
+}
+
+// MARK: - Photo Cache (local file system)
+
+enum CirclePhotoCache {
+    private static var photosDir: URL {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("circle_photos", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func save(_ image: UIImage, serverId: String) {
+        guard let data = image.jpegData(compressionQuality: 0.7) else { return }
+        let url = photosDir.appendingPathComponent("\(serverId).jpg")
+        try? data.write(to: url, options: .atomic)
+    }
+
+    static func load(serverId: String) -> UIImage? {
+        let url = photosDir.appendingPathComponent("\(serverId).jpg")
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return UIImage(data: data)
+    }
+
+    static func remove(serverId: String) {
+        let url = photosDir.appendingPathComponent("\(serverId).jpg")
+        try? FileManager.default.removeItem(at: url)
+    }
+}
+
+// MARK: - Favorite Circles
+
+enum FavoriteCircleStore {
+    private static let key = "tally.favoriteCircleIDs"
+
+    static func loadAll() -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+    }
+
+    static func save(_ ids: Set<String>) {
+        UserDefaults.standard.set(Array(ids), forKey: key)
     }
 }
 

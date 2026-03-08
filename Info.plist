@@ -8,5 +8,14 @@
 	<string>$(API_BASE_URL)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Tally uses your camera to scan receipts for bill splitting.</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Inter-Regular.ttf</string>
+		<string>Inter-Medium.ttf</string>
+		<string>Inter-SemiBold.ttf</string>
+		<string>Inter-Bold.ttf</string>
+		<string>Inter-ExtraBold.ttf</string>
+		<string>Inter-Black.ttf</string>
+	</array>
 </dict>
 </plist>

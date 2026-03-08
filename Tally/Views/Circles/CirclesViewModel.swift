@@ -1,5 +1,6 @@
 import ClerkKit
 import Foundation
+import UIKit
 
 @Observable
 @MainActor
@@ -70,15 +71,32 @@ final class CirclesViewModel {
                     circle.splitMethod = existing.splitMethod
                     circle.leaderId = existing.leaderId
                     circle.name = existing.name
+                    circle.photo = existing.photo
                 } else if let sid = apiCircle.serverId, let saved = persisted[sid] {
                     // Fallback: merge from disk persistence
                     saved.apply(to: &circle)
+                }
+                // Load photo from local cache
+                if circle.photo == nil, let sid = circle.serverId {
+                    circle.photo = CirclePhotoCache.load(serverId: sid)
                 }
                 // Default wallet balance for UI testing
                 if circle.walletBalance == 0 {
                     circle.walletBalance = Self.startingBalance
                 }
                 return circle
+            }
+
+            // Fetch photos from server for circles that have them but aren't loaded yet
+            for i in circles.indices where circles[i].hasServerPhoto && circles[i].photo == nil {
+                let serverId = circles[i].serverId!
+                let idx = i
+                Task {
+                    guard let data = try? await APIClient.shared.getRaw(path: "/v1/groups/\(serverId)/photo"),
+                          let image = UIImage(data: data) else { return }
+                    self.circles[idx].photo = image
+                    CirclePhotoCache.save(image, serverId: serverId)
+                }
             }
         } catch let e as TallyError {
             error = e
@@ -123,7 +141,7 @@ final class CirclesViewModel {
         )
 
         let isoFormatter = ISO8601DateFormatter()
-        let circle = TallyCircle(
+        var circle = TallyCircle(
             serverId: response.groupID,
             name: state.circleName,
             members: state.members,
@@ -132,6 +150,21 @@ final class CirclesViewModel {
             transactions: [],
             createdAt: isoFormatter.date(from: response.createdAt) ?? .now
         )
+
+        // Save photo locally and upload to backend
+        if let photo = state.photo {
+            circle.photo = photo
+            CirclePhotoCache.save(photo, serverId: response.groupID)
+            Task {
+                guard let jpegData = photo.jpegData(compressionQuality: 0.7) else { return }
+                try? await APIClient.shared.putRaw(
+                    path: "/v1/groups/\(response.groupID)/photo",
+                    data: jpegData,
+                    contentType: "image/jpeg"
+                )
+            }
+        }
+
         circles.insert(circle, at: 0)
         CircleStore.save(PersistedCircle(from: circle))
         return circle

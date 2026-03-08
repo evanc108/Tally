@@ -71,7 +71,7 @@ struct PayMemberSelectView: View {
                 Button("I'm done") {
                     viewModel.push(.waiting)
                 }
-                .buttonStyle(TallyPrimaryButtonStyle())
+                .buttonStyle(TallyDarkButtonStyle())
                 .padding(.horizontal, TallySpacing.screenPadding)
             }
             .padding(.bottom, TallySpacing.xxxl)
@@ -101,9 +101,9 @@ struct PayMemberSelectView: View {
             }
         } label: {
             HStack(spacing: 0) {
-                // Green left border for claimed items
+                // Left border for claimed items
                 Rectangle()
-                    .fill(isClaimed ? TallyColors.accent : Color.clear)
+                    .fill(isClaimed ? TallyColors.ink : Color.clear)
                     .frame(width: 3)
 
                 HStack(spacing: TallySpacing.lg) {
@@ -127,11 +127,11 @@ struct PayMemberSelectView: View {
                     // Status indicator
                     if isClaimed {
                         Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 20))
-                            .foregroundStyle(TallyColors.accent)
+                            .font(TallyIcon.xl)
+                            .foregroundStyle(TallyColors.ink)
                     } else if let initial = otherInitial {
                         Text(initial)
-                            .font(.system(size: 11, weight: .bold))
+                            .font(TallyFont.smallLabel)
                             .foregroundStyle(TallyColors.textSecondary)
                             .frame(width: 24, height: 24)
                             .background(TallyColors.bgSecondary)

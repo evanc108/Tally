@@ -62,7 +62,7 @@ struct VerificationResultView: View {
                     .fill(TallyColors.accentLight)
                     .frame(width: 88, height: 88)
                 Image(systemName: "checkmark")
-                    .font(.system(size: 36, weight: .bold))
+                    .font(TallyIcon.heroLg)
                     .foregroundStyle(TallyColors.accent)
             }
             .scaleEffect(appeared ? 1 : 0.3)
@@ -115,7 +115,7 @@ struct VerificationResultView: View {
                     .fill(TallyColors.statusAlertBg)
                     .frame(width: 88, height: 88)
                 Image(systemName: "xmark")
-                    .font(.system(size: 36, weight: .bold))
+                    .font(TallyIcon.heroLg)
                     .foregroundStyle(TallyColors.statusAlert)
             }
             .scaleEffect(appeared ? 1 : 0.3)
@@ -139,7 +139,7 @@ struct VerificationResultView: View {
             // Error reason
             HStack(spacing: TallySpacing.md) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 18))
+                    .font(TallyIcon.lg)
                     .foregroundStyle(TallyColors.statusAlert)
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -162,7 +162,7 @@ struct VerificationResultView: View {
             // Retry hint
             HStack(spacing: TallySpacing.sm) {
                 Image(systemName: "info.circle")
-                    .font(.system(size: 14))
+                    .font(TallyIcon.sm)
                     .foregroundStyle(TallyColors.textTertiary)
                 Text("Try again with better lighting and make sure\nyour ID is flat and all text is readable. You\nhave 3 attempts remaining.")
                     .font(TallyFont.small)
@@ -175,7 +175,7 @@ struct VerificationResultView: View {
 
             // Contact support link
             Button("Contact Support") {}
-                .font(.system(size: 13, weight: .semibold))
+                .font(TallyFont.buttonSmall)
                 .foregroundStyle(TallyColors.accent)
         }
     }
@@ -195,7 +195,7 @@ private struct FeatureUnlockRow: View {
                     .fill(TallyColors.accentLight)
                     .frame(width: 40, height: 40)
                 Image(systemName: "checkmark")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(TallyIcon.sm)
                     .foregroundStyle(TallyColors.accent)
             }
 

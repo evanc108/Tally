@@ -18,3 +18,21 @@ extension View {
         liquidGlass(in: RoundedRectangle(cornerRadius: cornerRadius))
     }
 }
+
+// MARK: - Glass Nav Button
+
+/// Reusable circular liquid-glass navigation button.
+struct GlassNavButton: View {
+    let icon: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(TallyIcon.lg)
+                .foregroundStyle(TallyColors.ink)
+                .frame(width: 44, height: 44)
+                .liquidGlass(in: Circle())
+        }
+    }
+}

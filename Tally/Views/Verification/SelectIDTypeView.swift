@@ -73,7 +73,7 @@ private struct IDTypeRow: View {
                         .fill(isSelected ? TallyColors.accentLight : TallyColors.bgSecondary)
                         .frame(width: 44, height: 44)
                     Image(systemName: type.icon)
-                        .font(.system(size: 18))
+                        .font(TallyIcon.lg)
                         .foregroundStyle(isSelected ? TallyColors.accent : TallyColors.textSecondary)
                 }
 

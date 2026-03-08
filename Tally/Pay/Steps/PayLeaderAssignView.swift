@@ -64,7 +64,7 @@ struct PayLeaderAssignView: View {
             Button("Continue") {
                 handleContinue()
             }
-            .buttonStyle(TallyPrimaryButtonStyle())
+            .buttonStyle(TallyDarkButtonStyle())
             .padding(.horizontal, TallySpacing.screenPadding)
             .padding(.bottom, TallySpacing.xxxl)
         }
@@ -122,7 +122,7 @@ struct PayLeaderAssignView: View {
                         let isAssigned = assignedMemberId == member.memberID
                         HStack(spacing: TallySpacing.xs) {
                             Text(String(member.displayName.prefix(1)).uppercased())
-                                .font(.system(size: 11, weight: .bold))
+                                .font(TallyFont.smallLabel)
                                 .foregroundStyle(isAssigned ? .white : TallyColors.textSecondary)
                                 .frame(width: 24, height: 24)
                                 .background(isAssigned ? TallyColors.cardColor(for: index) : TallyColors.bgSecondary)
@@ -149,10 +149,8 @@ struct PayLeaderAssignView: View {
         .padding(TallySpacing.cardPadding)
         .background(TallyColors.bgPrimary)
         .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
-        .overlay(
-            RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius)
-                .stroke(TallyColors.divider, lineWidth: 1)
-        )
+        .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+        .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
     }
 
     // MARK: - Member Summary
@@ -168,7 +166,7 @@ struct PayLeaderAssignView: View {
                 let total = memberTotal(for: member.memberID)
                 HStack(spacing: TallySpacing.md) {
                     Text(String(member.displayName.prefix(1)).uppercased())
-                        .font(.system(size: 11, weight: .bold))
+                        .font(TallyFont.smallLabel)
                         .foregroundStyle(.white)
                         .frame(width: 24, height: 24)
                         .background(TallyColors.cardColor(for: index))
