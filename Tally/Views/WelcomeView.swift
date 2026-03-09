@@ -56,7 +56,7 @@ struct WelcomeView: View {
                     .opacity(iconVisible ? 1 : 0)
 
                 // Logo
-                Text("tally")
+                Text("mntly")
                     .font(TallyFont.brandHero)
                     .foregroundStyle(.white)
                     .tracking(-2.5)

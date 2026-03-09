@@ -40,13 +40,16 @@ enum IDType: String, CaseIterable, Identifiable {
 
 struct IdentityVerificationFlowView: View {
     @Environment(AuthManager.self) private var authManager
+    @Environment(\.openURL) private var openURL
 
     @State private var step: VerificationStep = .intro
     @State private var selectedIDType: IDType = .driversLicense
     @State private var verificationSucceeded = true
+    @State private var isStartingKYC = false
+    @State private var kycError: String?
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
             TallyColors.white.ignoresSafeArea()
 
             switch step {
@@ -99,6 +102,9 @@ struct IdentityVerificationFlowView: View {
                     verificationSucceeded = succeeded
                     advanceTo(.result)
                 })
+                .task {
+                    await startKYC()
+                }
                 .transition(.opacity)
             case .result:
                 VerificationResultView(
@@ -108,6 +114,18 @@ struct IdentityVerificationFlowView: View {
                     onCancel: { authManager.backToWelcome() }
                 )
                 .transition(slideTransition)
+            }
+
+            if let kycError {
+                Text(kycError)
+                    .font(TallyFont.caption)
+                    .foregroundStyle(TallyColors.statusAlert)
+                    .padding(.horizontal, TallySpacing.screenPadding)
+                    .padding(.vertical, TallySpacing.sm)
+                    .background(TallyColors.statusAlertBg)
+                    .clipShape(RoundedRectangle(cornerRadius: TallyRadius.md))
+                    .padding(.bottom, TallySpacing.xl)
+                    .transition(.opacity)
             }
         }
         .animation(.spring(duration: 0.35, bounce: 0.1), value: step)
@@ -122,5 +140,48 @@ struct IdentityVerificationFlowView: View {
 
     private func advanceTo(_ newStep: VerificationStep) {
         step = newStep
+    }
+
+    private func startKYC() async {
+        if isStartingKYC {
+            return
+        }
+        isStartingKYC = true
+        kycError = nil
+
+        struct KYCStartRequest: Encodable {
+            let memberId: String
+
+            enum CodingKeys: String, CodingKey {
+                case memberId = "member_id"
+            }
+        }
+
+        struct KYCStartResponse: Decodable {
+            let sessionID: String
+            let url: String
+
+            enum CodingKeys: String, CodingKey {
+                case sessionID = "session_id"
+                case url
+            }
+        }
+
+        do {
+            let request = KYCStartRequest(memberId: UUID().uuidString)
+            let response: KYCStartResponse = try await APIClient.shared.post(
+                path: "/v1/users/me/kyc",
+                body: request
+            )
+            if let url = URL(string: response.url),
+               let scheme = url.scheme,
+               scheme == "http" || scheme == "https" {
+                await openURL(url)
+            }
+        } catch {
+            kycError = "Could not start verification. Please try again."
+        }
+
+        isStartingKYC = false
     }
 }

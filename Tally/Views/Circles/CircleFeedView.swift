@@ -206,10 +206,10 @@ struct CircleFeedView: View {
             )
 
             VStack(spacing: 0) {
-                // Tally brand
+                // Brand wordmark
                 HStack {
                     Spacer()
-                    Text("tally")
+                    Text("mntly")
                         .font(TallyFont.brandCardSmall)
                         .foregroundStyle(.white.opacity(0.9))
                 }

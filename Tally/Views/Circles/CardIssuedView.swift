@@ -16,7 +16,7 @@ struct CardIssuedView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     // Title
-                    Text("Your Tally card")
+                    Text("Your mntly card")
                         .font(TallyFont.largeTitle)
                         .foregroundStyle(TallyColors.textPrimary)
                         .padding(.top, TallySpacing.sm)
