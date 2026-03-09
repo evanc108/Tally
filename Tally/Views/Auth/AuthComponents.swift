@@ -18,7 +18,7 @@ struct AuthHeader: View {
                             .foregroundStyle(.white)
                     )
 
-                Text("tally")
+                Text("mntly")
                     .font(TallyFont.brandLarge)
                     .foregroundStyle(TallyColors.accent)
                     .tracking(-1.2)

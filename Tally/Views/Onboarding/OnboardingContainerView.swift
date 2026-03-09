@@ -187,7 +187,7 @@ private struct CircleIllustration: View {
                 .frame(width: 200, height: 200)
                 .scaleEffect(orbiting ? 1 : 0.92)
 
-            // Tally card
+            // Brand card
             RoundedRectangle(cornerRadius: 12)
                 .fill(
                     LinearGradient(
@@ -199,7 +199,7 @@ private struct CircleIllustration: View {
                 .frame(width: 140, height: 90)
                 .shadow(color: TallyColors.accent.opacity(0.25), radius: 12, y: 8)
                 .overlay(alignment: .topLeading) {
-                    Text("tally")
+                    Text("mntly")
                         .font(TallyFont.brandTiny)
                         .foregroundStyle(.white)
                         .tracking(-0.3)

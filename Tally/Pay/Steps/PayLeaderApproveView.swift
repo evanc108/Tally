@@ -198,7 +198,7 @@ struct PayLeaderApproveView: View {
                                 .foregroundStyle(.white.opacity(0.7))
                         }
                         Spacer()
-                        Text("tally")
+                        Text("mntly")
                             .font(TallyFont.brandCard)
                             .foregroundStyle(.white)
                     }

@@ -36,7 +36,7 @@ enum TallyTab: Int, CaseIterable {
         switch self {
         case .home: "house"
         case .circles: "person.3"
-        case .pay: "dollarsign"
+        case .pay: "receipt"
         case .wallet: "wallet.bifold"
         case .profile: "person"
         }
@@ -46,7 +46,7 @@ enum TallyTab: Int, CaseIterable {
         switch self {
         case .home: "house.fill"
         case .circles: "person.3.fill"
-        case .pay: "dollarsign"
+        case .pay: "receipt"
         case .wallet: "wallet.bifold.fill"
         case .profile: "person.fill"
         }
@@ -183,8 +183,8 @@ private struct TallyTabBar: View {
             Button {
                 onPayTap()
             } label: {
-                Image(systemName: "dollarsign")
-                    .font(TallyIcon.md)
+                Image(systemName: "receipt")
+                    .font(TallyIcon.lg)
                     .fontWeight(.bold)
                     .foregroundStyle(.white)
                     .frame(width: 50, height: 50)
@@ -217,7 +217,7 @@ private struct TallyTabBar: View {
             }
         }
         .buttonStyle(TallyTabBarButtonStyle())
-        .padding(.horizontal, TallySpacing.sm)
+        .padding(.horizontal, TallySpacing.md)
         .padding(.vertical, TallySpacing.sm)
         .glassEffect(.regular, in: Rectangle())
     }
@@ -371,7 +371,7 @@ private struct HomeTab: View {
 
     private var topBar: some View {
         HStack {
-            Text("Mntly")
+            Text("mntly")
                 .font(TallyFont.brandNav)
                 .foregroundStyle(TallyColors.textPrimary)
             Spacer()
@@ -546,9 +546,6 @@ private struct HomeTab: View {
                 quickGridButton(icon: "plus.circle", label: "Top Up")
                 quickGridButton(icon: "arrow.left.arrow.right", label: "Transfer")
                 quickGridButton(icon: "arrow.down.circle", label: "Withdraw")
-                quickGridButton(icon: "banknote", label: "Deposit")
-                quickGridButton(icon: "doc.text", label: "Bills")
-                quickGridButton(icon: "dollarsign.circle", label: "Currency")
             }
         }
         .padding(.horizontal, TallySpacing.screenPadding)
@@ -794,6 +791,7 @@ private struct CirclesTab: View {
 private struct ProfileTab: View {
     @Environment(AuthManager.self) private var authManager
     @Environment(Clerk.self) private var clerk
+    @State private var showLinkBank = false
 
     var body: some View {
         NavigationStack {
@@ -823,8 +821,12 @@ private struct ProfileTab: View {
                 }
 
                 Section("Linked Accounts") {
-                    Label("Add bank account", systemImage: "building.columns")
-                        .foregroundStyle(TallyColors.textSecondary)
+                    Button {
+                        showLinkBank = true
+                    } label: {
+                        Label("Add bank account", systemImage: "building.columns")
+                    }
+                    .foregroundStyle(TallyColors.textSecondary)
                 }
 
                 Section("Security") {
@@ -857,6 +859,9 @@ private struct ProfileTab: View {
                 }
             }
             .navigationTitle("Profile")
+            .sheet(isPresented: $showLinkBank) {
+                PaymentMethodLinkView()
+            }
         }
     }
 
@@ -864,7 +869,7 @@ private struct ProfileTab: View {
         let first = clerk.user?.firstName ?? ""
         let last = clerk.user?.lastName ?? ""
         let full = "\(first) \(last)".trimmingCharacters(in: .whitespaces)
-        return full.isEmpty ? "Tally User" : full
+        return full.isEmpty ? "mntly User" : full
     }
 
     private var initials: String {
@@ -878,6 +883,131 @@ private struct ProfileTab: View {
         Task {
             try? await clerk.auth.signOut()
             authManager.signOut()
+        }
+    }
+}
+
+// MARK: - Payment Method Link View (dev)
+
+private struct PaymentMethodLinkView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var memberID: String = ""
+    @State private var statusMessage: String?
+    @State private var isLinking = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: TallySpacing.lg) {
+                Text("Link bank account")
+                    .font(TallyFont.title)
+                    .foregroundStyle(TallyColors.textPrimary)
+
+                Text("For now, enter a member_id from a circle in your dev environment. The app will call the backend confirm endpoint with a mock Stripe payment method id.")
+                    .font(TallyFont.small)
+                    .foregroundStyle(TallyColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(alignment: .leading, spacing: TallySpacing.sm) {
+                    Text("Member ID")
+                        .font(TallyFont.smallLabel)
+                        .foregroundStyle(TallyColors.textSecondary)
+
+                    TextField("mem_...", text: $memberID)
+                        .font(TallyFont.body)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .padding(.horizontal, TallySpacing.lg)
+                        .frame(height: TallySpacing.inputHeight)
+                        .background(TallyColors.bgSecondary)
+                        .clipShape(RoundedRectangle(cornerRadius: TallySpacing.cardCornerRadius))
+                }
+
+                Button {
+                    linkBank()
+                } label: {
+                    if isLinking {
+                        ProgressView()
+                            .tint(.white)
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text("Link bank (dev)")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(TallyPrimaryButtonStyle())
+                .disabled(isLinking || memberID.isEmpty)
+                .opacity((isLinking || memberID.isEmpty) ? 0.6 : 1)
+
+                if let statusMessage {
+                    Text(statusMessage)
+                        .font(TallyFont.small)
+                        .foregroundStyle(TallyColors.textSecondary)
+                }
+
+                Spacer()
+            }
+            .padding(TallySpacing.xl)
+            .navigationTitle("Add bank")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .font(TallyFont.bodySemibold)
+                    .foregroundStyle(TallyColors.accent)
+                }
+            }
+        }
+    }
+
+    private func linkBank() {
+        guard !memberID.isEmpty else { return }
+        isLinking = true
+        statusMessage = nil
+
+        Task {
+            struct CreateSetupIntentResponseDTO: Decodable {
+                let clientSecret: String
+
+                enum CodingKeys: String, CodingKey {
+                    case clientSecret = "client_secret"
+                }
+            }
+
+            struct ConfirmPaymentMethodRequestDTO: Encodable {
+                let memberId: String
+                let paymentMethodId: String
+
+                enum CodingKeys: String, CodingKey {
+                    case memberId = "member_id"
+                    case paymentMethodId = "payment_method_id"
+                }
+            }
+
+            struct ConfirmPaymentMethodResponseDTO: Decodable {
+                let status: String
+            }
+
+            do {
+                _ = try await APIClient.shared.post(path: "/v1/users/me/payment-method") as CreateSetupIntentResponseDTO
+
+                let body = ConfirmPaymentMethodRequestDTO(
+                    memberId: memberID,
+                    paymentMethodId: "pm_mock_primary"
+                )
+
+                let response: ConfirmPaymentMethodResponseDTO = try await APIClient.shared.post(
+                    path: "/v1/users/me/payment-method/confirm",
+                    body: body
+                )
+
+                statusMessage = "Server response: \(response.status)"
+            } catch {
+                statusMessage = "Failed to link bank. Please check the member ID and try again."
+            }
+
+            isLinking = false
         }
     }
 }

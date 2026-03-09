@@ -466,7 +466,7 @@ private struct CircleListCard: View {
                     .buttonStyle(.plain)
 
                     ShareLink(
-                        item: "Join my \"\(circle.name)\" circle on Mntly!",
+                        item: "Join my \"\(circle.name)\" circle on mntly!",
                         subject: Text("Join \(circle.name)"),
                         message: Text("Split expenses with friends")
                     ) {
