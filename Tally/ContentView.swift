@@ -87,19 +87,22 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Custom liquid glass tab bar
-            TallyTabBar(selectedTab: $selectedTab, onPayTap: {
-                let vm = PayFlowViewModel()
-                vm.loadCircles(circlesViewModel.circles)
-                payFlowVM = vm
-                withAnimation(.spring(response: 0.38, dampingFraction: 0.72)) {
+            // Custom liquid glass tab bar — pinned to bottom, no gap
+            GeometryReader { geo in
+                TallyTabBar(selectedTab: $selectedTab, onPayTap: {
+                    let vm = PayFlowViewModel()
+                    vm.loadCircles(circlesViewModel.circles)
+                    payFlowVM = vm
                     showScanModal = true
-                }
-            })
-            .opacity(showScanModal ? 0 : 1)
-            .scaleEffect(x: showScanModal ? 0.7 : 1, y: 1, anchor: .bottom)
-            .animation(.spring(response: 0.32, dampingFraction: 0.78), value: showScanModal)
+                })
+                .padding(.bottom, geo.safeAreaInsets.bottom)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .opacity(showScanModal ? 0 : 1)
+            }
+            .frame(height: 120)
+            .ignoresSafeArea(edges: .bottom)
         }
+        .ignoresSafeArea(edges: .bottom)
         .ignoresSafeArea(.keyboard)
         .task {
             await circlesViewModel.fetchCircles()
@@ -117,9 +120,7 @@ struct ContentView: View {
                     Color.clear
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
-                                showScanModal = false
-                            }
+                            showScanModal = false
                         }
                 }
 
@@ -127,14 +128,10 @@ struct ContentView: View {
                     BillScanPopover(
                         viewModel: vm,
                         onDismiss: {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
-                                showScanModal = false
-                            }
+                            showScanModal = false
                         },
                         onScanComplete: {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
-                                showScanModal = false
-                            }
+                            showScanModal = false
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                                 showPayFlow = true
                             }
@@ -199,64 +196,56 @@ private struct TallyTabBar: View {
             tabButton(for: .wallet)
             // Profile — user initials or image
             Button {
-                withAnimation(.snappy(duration: 0.25)) {
-                    selectedTab = .profile
-                }
+                selectedTab = .profile
             } label: {
+                let isSelected = selectedTab == .profile
                 VStack(spacing: 4) {
                     Text(userInitials)
                         .font(TallyFont.avatarSmall)
                         .foregroundStyle(.white)
                         .frame(width: 28, height: 28)
-                        .background(selectedTab == .profile ? TallyColors.accent : TallyColors.ink.opacity(0.15))
+                        .background(isSelected ? TallyColors.accent : TallyColors.ink.opacity(0.15))
                         .clipShape(Circle())
                     Text("Profile")
                         .font(TallyFont.micro)
-                        .foregroundStyle(TallyColors.ink)
+                        .fontWeight(isSelected ? .semibold : .regular)
+                        .foregroundStyle(isSelected ? TallyColors.ink : TallyColors.ink.opacity(0.55))
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, TallySpacing.xs)
                 .padding(.horizontal, 4)
-                .background {
-                    if selectedTab == .profile {
-                        Capsule()
-                            .fill(TallyColors.ink.opacity(0.2))
-                            .transition(.scale.combined(with: .opacity))
-                    }
-                }
             }
         }
+        .buttonStyle(TallyTabBarButtonStyle())
         .padding(.horizontal, TallySpacing.sm)
         .padding(.vertical, TallySpacing.sm)
-        .glassEffect(.regular.interactive(), in: Capsule())
-        .padding(.horizontal, TallySpacing.lg)
-        .padding(.bottom, TallySpacing.sm)
+        .glassEffect(.regular, in: Rectangle())
     }
 
     private func tabButton(for tab: TallyTab) -> some View {
         Button {
-            withAnimation(.snappy(duration: 0.25)) {
-                selectedTab = tab
-            }
+            selectedTab = tab
         } label: {
+            let isSelected = selectedTab == tab
             VStack(spacing: 4) {
-                Image(systemName: tab.activeIcon)
+                Image(systemName: isSelected ? tab.activeIcon : tab.icon)
                     .font(TallyIcon.xl)
                 Text(tab.title)
                     .font(TallyFont.micro)
+                    .fontWeight(isSelected ? .semibold : .regular)
             }
-            .foregroundStyle(TallyColors.ink)
+            .foregroundStyle(isSelected ? TallyColors.ink : TallyColors.ink.opacity(0.55))
             .frame(maxWidth: .infinity)
             .padding(.vertical, TallySpacing.xs)
             .padding(.horizontal, 4)
-            .background {
-                if selectedTab == tab {
-                    Capsule()
-                        .fill(TallyColors.ink.opacity(0.2))
-                        .transition(.scale.combined(with: .opacity))
-                }
-            }
         }
+    }
+}
+
+// Button style that disables the default pressed highlight/scale for tab bar items
+private struct TallyTabBarButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
     }
 }
 
